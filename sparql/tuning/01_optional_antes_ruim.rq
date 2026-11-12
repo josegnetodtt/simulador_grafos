@@ -1,0 +1,17 @@
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+# RUIM: monta os OPTIONAL para TODOS os vínculos da base e só no fim filtra a empresa.
+# Devolve o mesmo resultado da versão boa, mas faz muito mais trabalho no meio do caminho.
+SELECT ?p ?socio ?empresa ?ate ?q ?n
+WHERE {
+  { SELECT ?p ?ate ?q ?n
+    WHERE {
+      ?p a ex:ParticipacaoSocietaria .
+      OPTIONAL { ?p ex:validoAte ?ate }
+      OPTIONAL { ?p ex:qualificacao ?q }
+      OPTIONAL { ?p ex:nomeSocio ?n }
+    } }
+  ?p ex:socio ?socio ;
+     ex:empresa ?empresa .
+  FILTER (?empresa = <http://petrobras.exemplo/empresa/99999993>)
+}

@@ -1,0 +1,2 @@
+# RUIM: devolve a base inteira, todas as colunas, sem LIMIT.
+SELECT * WHERE { ?s ?p ?o }

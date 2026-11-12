@@ -1,0 +1,10 @@
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+# Participações com data de saída anterior à de entrada (caso plantado: sócio PX000020).
+SELECT ?participacao ?de ?ate
+WHERE {
+  ?participacao a ex:ParticipacaoSocietaria ;
+                ex:validoDe ?de ;
+                ex:validoAte ?ate .
+  FILTER (?ate < ?de)
+}

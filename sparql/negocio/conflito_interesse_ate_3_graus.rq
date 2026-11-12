@@ -1,0 +1,20 @@
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+# Igual a conflito_interesse.rq, mas aceitando parentes de até 3 graus de distância (caso plantado: CX-0005).
+# Caminho com graus explícitos e limitados; evitar ex:temParente* (ver sparql/tuning).
+SELECT DISTINCT ?empregado ?parente ?empresa ?contrato
+WHERE {
+  ?empregado a ex:Empregado .
+  ?empregado (ex:temParente | ex:temParente/ex:temParente | ex:temParente/ex:temParente/ex:temParente) ?parente .
+  FILTER (?empregado != ?parente)
+  ?p a ex:ParticipacaoSocietaria ;
+     ex:socio ?parente ;
+     ex:empresa ?empresa ;
+     ex:validoDe ?pDe .
+  OPTIONAL { ?p ex:validoAte ?pAte }
+  ?contrato a ex:Contrato ;
+            ex:fornecedor ?empresa ;
+            ex:vigenciaInicio ?cDe ;
+            ex:vigenciaFim ?cAte .
+  FILTER (?pDe <= ?cAte && (!BOUND(?pAte) || ?pAte >= ?cDe))
+}

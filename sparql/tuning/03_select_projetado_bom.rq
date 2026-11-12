@@ -1,0 +1,6 @@
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+# BOM: só as variáveis necessárias, padrão específico e LIMIT.
+SELECT ?empresa ?nome
+WHERE { ?empresa ex:razaoSocial ?nome }
+LIMIT 100

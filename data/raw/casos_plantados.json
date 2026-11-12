@@ -1,0 +1,38 @@
+[
+  {
+    "caso": "A",
+    "esperado": "ALERTA",
+    "contrato": "CX-0001",
+    "descricao": "Empregado EX000001 é cônjuge do sócio PX000001 de fornecedor com contrato vigente."
+  },
+  {
+    "caso": "B",
+    "esperado": "SEM ALERTA",
+    "contrato": "CX-0002",
+    "descricao": "Sócio PX000002 (cônjuge de EX000002) saiu em 2020, antes do contrato de 2023."
+  },
+  {
+    "caso": "C",
+    "esperado": "CX-0003 SEM ALERTA; CX-0004 ALERTA",
+    "contrato": "CX-0003/CX-0004",
+    "descricao": "Empresa 99999993 troca de sócios; irmão PX000004 de EX000003 era sócio de 2014 a 2019."
+  },
+  {
+    "caso": "D",
+    "esperado": "DESEMPENHO",
+    "contrato": "-",
+    "descricao": "Empresa 99999990 é um supernó (hub) com milhares de estabelecimentos."
+  },
+  {
+    "caso": "E",
+    "esperado": "ALERTA só com caminho de até 3 graus",
+    "contrato": "CX-0005",
+    "descricao": "EX000004 -> PX000010 -> PX000011 -> PX000012 (sócio de 99999994)."
+  },
+  {
+    "caso": "F",
+    "esperado": "QUALIDADE",
+    "contrato": "-",
+    "descricao": "CNPJ inválido (1234567), razão social duplicada (00000004) e sócio com saída < entrada (99999995)."
+  }
+]

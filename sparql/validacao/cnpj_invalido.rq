@@ -1,0 +1,8 @@
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+# Empresas cuja URI não tem exatamente 8 dígitos (caso plantado: 1234567).
+SELECT ?empresa
+WHERE {
+  ?empresa a ex:Empresa .
+  FILTER (!REGEX(STR(?empresa), "/empresa/[0-9]{8}$"))
+}

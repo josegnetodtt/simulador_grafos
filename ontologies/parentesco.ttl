@@ -1,0 +1,26 @@
+@prefix ex:   <http://petrobras.exemplo/onto#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# Pessoas e parentesco. Cada linha de parentescos.csv (a, b, tipo) vira "a tem<tipo> b".
+
+ex:Pessoa    a owl:Class .
+ex:Empregado a owl:Class ; rdfs:subClassOf ex:Pessoa .
+
+ex:nome           a owl:DatatypeProperty ; rdfs:domain ex:Pessoa .
+ex:lotacao        a owl:DatatypeProperty ; rdfs:domain ex:Empregado .
+ex:cargo          a owl:DatatypeProperty ; rdfs:domain ex:Empregado .
+ex:dataAdmissao   a owl:DatatypeProperty ; rdfs:domain ex:Empregado .
+ex:dataDesligamento a owl:DatatypeProperty ; rdfs:domain ex:Empregado .
+
+# Relação geral: simétrica. NÃO declarar como transitiva (parente de parente viraria parente de todos).
+ex:temParente a owl:ObjectProperty, owl:SymmetricProperty ;
+              rdfs:domain ex:Pessoa ; rdfs:range ex:Pessoa .
+
+ex:temConjuge  a owl:ObjectProperty, owl:SymmetricProperty ; rdfs:subPropertyOf ex:temParente .
+ex:temIrmao    a owl:ObjectProperty, owl:SymmetricProperty ; rdfs:subPropertyOf ex:temParente .
+ex:temCunhado  a owl:ObjectProperty, owl:SymmetricProperty ; rdfs:subPropertyOf ex:temParente .
+ex:temSogro    a owl:ObjectProperty ; rdfs:subPropertyOf ex:temParente .
+ex:temPai      a owl:ObjectProperty ; rdfs:subPropertyOf ex:temParente ; owl:inverseOf ex:temFilho .
+ex:temMae      a owl:ObjectProperty ; rdfs:subPropertyOf ex:temParente ; owl:inverseOf ex:temFilho .
+ex:temFilho    a owl:ObjectProperty ; rdfs:subPropertyOf ex:temParente .

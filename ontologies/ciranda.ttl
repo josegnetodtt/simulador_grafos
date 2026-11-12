@@ -1,0 +1,21 @@
+@prefix ex:   <http://petrobras.exemplo/onto#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# Ciranda: uma mistura é a soma de itens de composição (componente + percentual); rotas ligam navios e portos.
+
+ex:ComposicaoItem a owl:Class .
+ex:Rota           a owl:Class .
+
+ex:mistura      a owl:ObjectProperty ; rdfs:domain ex:ComposicaoItem .
+ex:componente   a owl:ObjectProperty ; rdfs:domain ex:ComposicaoItem .
+ex:percentual   a owl:DatatypeProperty ; rdfs:domain ex:ComposicaoItem .
+ex:grauAPI      a owl:DatatypeProperty ; rdfs:domain ex:ComposicaoItem .
+ex:teorEnxofre  a owl:DatatypeProperty ; rdfs:domain ex:ComposicaoItem .
+
+ex:navio        a owl:ObjectProperty ; rdfs:domain ex:Rota .
+ex:portoOrigem  a owl:ObjectProperty ; rdfs:domain ex:Rota .
+ex:portoDestino a owl:ObjectProperty ; rdfs:domain ex:Rota .
+ex:capacidade   a owl:DatatypeProperty ; rdfs:domain ex:Rota .
+ex:janelaInicio a owl:DatatypeProperty ; rdfs:domain ex:Rota .
+ex:janelaFim    a owl:DatatypeProperty ; rdfs:domain ex:Rota .

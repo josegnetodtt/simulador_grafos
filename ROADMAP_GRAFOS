@@ -1,0 +1,915 @@
+# ROADMAP GRAFOS — Petrobras (Anzo / Graph Studio)
+
+> Documento de trabalho para **entender o escopo, o seu papel operacional e o que construir primeiro**.
+> Tudo aqui é escrito para quem ainda está **revisando e aprendendo grafos**: cada conceito vem com uma explicação simples antes da parte técnica.
+> Dados e scripts deste roadmap são **100% simulados** (nenhum dado real de RH, contratos ou Receita Federal entra no simulador).
+
+### Como estudar este documento
+
+| Se você quer... | Leia |
+|---|---|
+| Entender o contexto e o seu papel | Seções 1 a 3 |
+| Entender o problema (memória e desempenho) | Seção 4 |
+| Aprender a "linguagem" de grafos do zero | Seção 2 (glossário) e depois 9.1 a 9.4 |
+| Ver **qual modelo é mais rápido e por quê** | Seção 9.6 (resultados medidos) |
+| Rodar o simulador na sua máquina | Seção 10 (ordem dos scripts) e o `README.md` |
+| Ver o plano de trabalho e entregas | Seções 13 e 14 |
+| Saber o que perguntar ao time da Petrobras | Seção 15.3 |
+
+**Três ideias para guardar desde já:**
+1. **Triplas** são "frases" (sujeito – predicado – objeto); o grafo é um monte de frases ligadas.
+2. O motor (AnzoGraph) trabalha **na memória**; tudo que "incha" os dados ou os resultados intermediários consome RAM.
+3. **Modelar o tempo** (quando cada fato foi verdadeiro) é a decisão que mais pesa em memória **e** em velocidade de consulta.
+
+---
+
+## Índice
+
+1. [O cenário em uma página](#1-o-cenário-em-uma-página)
+2. [Glossário rápido de grafos](#2-glossário-rápido-de-grafos)
+3. [O seu papel operacional](#3-o-seu-papel-operacional)
+4. [Por que a memória estoura? (o problema central)](#4-por-que-a-memória-estoura-o-problema-central)
+5. [Mapa das frentes de demanda](#5-mapa-das-frentes-de-demanda)
+6. [Requisitos técnicos por pilar](#6-requisitos-técnicos-por-pilar)
+7. [Estrutura de pastas do simulador](#7-estrutura-de-pastas-do-simulador)
+8. [Bases simuladas](#8-bases-simuladas)
+9. [Modelagem semântica e temporal](#9-modelagem-semântica-e-temporal)
+10. [Scripts simulados](#10-scripts-simulados)
+11. [Ingestão incremental e Databricks](#11-ingestão-incremental-e-databricks)
+12. [Tuning e dimensionamento (memória e cluster)](#12-tuning-e-dimensionamento-memória-e-cluster)
+13. [Roadmap por fases](#13-roadmap-por-fases)
+14. [Plano de estudo](#14-plano-de-estudo)
+15. [Riscos, critérios de aceite e perguntas em aberto](#15-riscos-critérios-de-aceite-e-perguntas-em-aberto)
+
+---
+
+## 1. O cenário em uma página
+
+**Em uma frase:** a plataforma de grafos (Anzo / Graph Studio) virou estratégica para vários times da Petrobras, e o volume real de dados está maior do que o ambiente atual suporta. Precisamos **resolver o gargalo agora** e **construir conhecimento para sustentar isso nos próximos anos**.
+
+| Item | Situação |
+|---|---|
+| Cliente demandante principal | **IEMSI** (Integridade) |
+| Entrega já aprovada | **Synapse** — cruza RH + contratos sobre ontologia de **parentesco** |
+| Em desenvolvimento | Cruzamento com **Receita Federal** (empresas, estabelecimentos, sócios, histórico) |
+| Sintoma atual | **Falhas de memória** na *transformação* e na *carga* ao usar a volumetria real |
+| Natureza da solução | Mais **arquitetura e modelagem** do que "comprar máquina" |
+| Horizonte | Sustentação contínua (2026–2027+) |
+
+**Analogia simples:** imagine que o grafo é um grande mapa de relações (pessoas, empresas, contratos). Funcionava bem com um bairro. Agora querem o país inteiro, com histórico de cada mudança — e o "papel" onde o mapa é desenhado (a memória do servidor) acabou.
+
+---
+
+## 2. Glossário rápido de grafos
+
+| Termo | Explicação intuitiva | Exemplo |
+|---|---|---|
+| **Grafo** | Conjunto de "coisas" (nós) ligadas por "relações" (arestas). | Pessoa — é sócia de → Empresa |
+| **Tripla (triple)** | A menor unidade do banco: **Sujeito – Predicado – Objeto**, como uma frase. | `Maria  éSócioDe  EmpresaX` |
+| **Triple store** | Banco de dados especializado em guardar triplas. | Anzo / AnzoGraph |
+| **RDF** | O "formato" padrão das triplas. Toda coisa é identificada por uma **URI** (um endereço único). | `<http://petrobras.com/pessoa/123>` |
+| **URI / IRI** | Identificador único global de um nó. | `ex:Empresa_12345678` |
+| **Literal** | Valor "puro" (texto, número, data), não é um nó. | `"2021-05-10"^^xsd:date` |
+| **Ontologia** | O "dicionário/regras do domínio": quais tipos de coisas existem e como se relacionam. | "Pai é um tipo de Parente" |
+| **OWL** | Linguagem para escrever ontologias com mais poder (inversas, hierarquias, restrições). | `owl:inverseOf` |
+| **SPARQL** | A "SQL dos grafos": linguagem de consulta. | `SELECT ?p WHERE { ?p a ex:Pessoa }` |
+| **Named graph** | Uma "gaveta" dentro do banco, que agrupa triplas (por fonte, data, lote). | Gaveta `graph:RF_2025_06` |
+| **Reificação / nó de vínculo** | Transformar uma relação em um nó para poder anotá-la (datas, fonte...). Base da modelagem temporal. | Vínculo societário com início e fim |
+| **Modelo temporal** | Modelar **quando** cada fato foi verdadeiro (validade) e/ou **quando** foi registrado. | `validoDe`, `validoAte` |
+| **Carga (load)** | Colocar os dados dentro do triple store. | Arquivos `.nt.gz` → AnzoGraph |
+| **Transformação** | Converter/derivar dados dentro do grafo (ex.: SPARQL `INSERT ... WHERE`). | Criar relações `temParente` inferidas |
+| **Ingestão incremental** | Carregar só o que **mudou**, não tudo de novo. | Delta mensal da Receita |
+| **Graphmart (Anzo)** | Camada do Anzo que organiza datasets + camadas de transformação em um grafo consultável. | Graphmart do Synapse |
+| **MPP / in-memory** | Motor que distribui o trabalho em vários nós e mantém dados na **RAM**. É a razão de memória ser o recurso crítico. | AnzoGraph |
+
+> Observação: nomes e recursos exatos de Anzo/Graph Studio (Graphmart, camadas, steps) devem ser **confirmados na documentação da versão instalada** no ambiente da Petrobras.
+
+---
+
+## 3. O seu papel operacional
+
+O perfil pedido se divide em **três pilares**. O seu dia a dia vai alternar entre eles:
+
+```mermaid
+flowchart LR
+    A[Pilar 1<br/>Modelagem semântica<br/>RDF · OWL · SPARQL · temporal] --> D((Grafo<br/>saudável e<br/>escalável))
+    B[Pilar 2<br/>Engenharia de dados<br/>RDF em larga escala · incremental · Databricks] --> D
+    C[Pilar 3<br/>Tuning e dimensionamento<br/>memória · cluster] --> D
+```
+
+### 3.1 O que você fará, na prática
+
+| Pilar | Atividades típicas | Entregáveis concretos |
+|---|---|---|
+| **1. Modelagem semântica** | Revisar/evoluir a ontologia de parentesco; modelar Receita Federal no tempo; padronizar URIs; escrever consultas SPARQL de validação e de negócio | Ontologia `.ttl`, guia de URIs, catálogo de consultas, diagrama do modelo |
+| **2. Engenharia de dados** | Gerar RDF a partir de tabelas (Databricks/Spark); particionar cargas; criar fluxo incremental; reduzir picos de memória na transformação | Pipelines, scripts de carga, manifestos de lote, rotina de reprocesso |
+| **3. Tuning / dimensionamento** | Medir consumo de memória por frente; projetar capacidade; avaliar topologia em cluster; definir limites e alertas | Relatório de dimensionamento, benchmark, proposta de topologia, runbook |
+| **Transversal** | Apoiar discussões arquiteturais; documentar; transferir conhecimento (sustentação) | ADRs (decisões de arquitetura), wiki, treinamentos curtos |
+
+### 3.2 Como o seu trabalho se conecta às demandas
+
+- **Hoje (urgente):** destravar o Synapse ampliado + Receita Federal (falha de memória).
+- **Curto prazo:** ResOps entrando em produção (estabilidade e versionamento).
+- **Médio prazo:** Ciranda e grafos de conhecimento para agentes de IA (crescimento forte em 2027).
+- **Contínuo:** readequação da arquitetura (cluster) e melhoria contínua.
+
+---
+
+## 4. Por que a memória estoura? (o problema central)
+
+O AnzoGraph mantém os dados **em memória** para ser rápido. Isso significa que **qualquer etapa que "incha" os dados** consome RAM.
+
+### 4.1 Principais causas (hipóteses a validar com o simulador)
+
+| # | Causa provável | Explicação simples | Como o simulador ajuda a provar |
+|---|---|---|---|
+| 1 | **Volumetria real** (bilhões de triplas) | Mais triplas = mais RAM, simples assim. | Gerar bases em 3 escalas (S/M/G) e medir RAM x triplas |
+| 2 | **Modelo temporal "gordo"** | Cada mudança no tempo vira vários nós/triplas novas. | Comparar modelos temporais (seção 9) |
+| 3 | **Transformações monolíticas** | Um único `INSERT ... WHERE` gigante faz *joins* enormes e guarda resultados intermediários na RAM. | Rodar a mesma transformação inteira vs. fatiada por partição |
+| 4 | **Carga em arquivo único/grande** | Formato não paralelizável e sem divisão. | Comparar 1 arquivo vs. N partes `.nt.gz` |
+| 5 | **Consultas caras** (`OPTIONAL` em cascata, `property paths *`, produtos cartesianos) | Explosão de combinações intermediárias. | Biblioteca de consultas "boas x ruins" |
+| 6 | **URIs longas e literais repetidos** | Cada string ocupa espaço (mesmo com dicionário). | Medir impacto de URIs curtas x longas |
+| 7 | **Recarga total a cada ciclo** | Reprocessar tudo, pico duplo (dados antigos + novos). | Incremental x full load |
+
+### 4.2 Estratégias de mitigação (o "cardápio" do roadmap)
+
+1. **Particionar** por chave estável (ex.: hash do CNPJ básico) e processar em lotes.
+2. **Gerar RDF fora do grafo** (Databricks/Spark), em formato **linha-a-linha** (N-Triples / N-Quads), que é fácil de dividir e carregar em paralelo.
+3. **Fatiar transformações** SPARQL (por partição/graph) e **materializar** resultados intermediários úteis.
+4. **Filtrar cedo** nas consultas e evitar caminhos ilimitados.
+5. **Incremental** (só delta), com *named graphs* por lote para poder substituir/remover um lote inteiro.
+6. **Modelar com economia**: só criar nós de vínculo onde há necessidade temporal real.
+7. **Dimensionar e, se justificado, ir para cluster** (mais memória agregada, não só máquina maior).
+
+---
+
+## 5. Mapa das frentes de demanda
+
+| Frente | Área | Natureza do grafo | Estágio | Desafio principal | Prioridade |
+|---|---|---|---|---|---|
+| **Synapse (atual)** | IEMSI | Parentesco + RH + contratos | Aprovado | Manter e evoluir | Alta |
+| **Synapse + Receita Federal / Synapse ampliado** | IEMSI | Empresas, estabelecimentos, sócios **no tempo** | Em desenvolvimento | **Memória** em transformação e carga | **Altíssima** |
+| **ResOps** | EXP-RES-DC/DS-CIEN | Transacional: versionamento de modelos de reservatório | Quase produção | Consistência, versionamento, escrita frequente | Alta |
+| **Ciranda** | INP/PRI/GIN | Composição de misturas (logística) + roteamento de navios | Desenvolvimento | Modelar misturas e restrições; inferência | Média |
+| **Grafos de conhecimento p/ agentes de IA** | TIC/DAIA | Conhecimento corporativo para LLM/agentes | Demanda frequente | **Crescimento de volume em 2027**; consultas rápidas e confiáveis | Média/Alta |
+| **Readequação da arquitetura** | Plataforma | Topologia (single node x cluster) | Avaliação | Decisão fundamentada por dados | Alta (transversal) |
+
+```mermaid
+timeline
+    title Linha do tempo de demandas (visão macro)
+    2026 : Synapse + Receita Federal (destravar memória)
+         : ResOps em produção
+         : Avaliação de arquitetura em cluster
+    2027 : Synapse ampliado em grande volume
+         : Ciranda em evolução
+         : Grafos de conhecimento para IA (crescimento forte)
+```
+
+---
+
+## 6. Requisitos técnicos por pilar
+
+### 6.1 Pilar 1 — Modelagem semântica e ontologias
+
+**Requisitos**
+- RDF (triplas, URIs, literais, tipos `xsd`), **RDFS/OWL** (classes, propriedades, inversas, hierarquias), **SPARQL 1.1** (SELECT, CONSTRUCT, INSERT/DELETE, agregações, subconsultas).
+- **Modelos temporais:** validade (`validoDe`/`validoAte`), tempo de registro, snapshots, versionamento.
+- Convenções de **URI** e de **nomes**; governança da ontologia (versionamento semântico).
+- Validação (ex.: **SHACL**, se suportado/adotado no ambiente) ou consultas SPARQL de qualidade.
+
+**Critério de "dominado":** consegue desenhar, no papel, o modelo de "pessoa sócia de empresa entre 2018 e 2022" e escrever a consulta que responde "quem era sócio em 2020-03-01?".
+
+### 6.2 Pilar 2 — Engenharia de dados para grafos
+
+**Requisitos**
+- **Python** (geração/validação), **PySpark / Databricks** (conversão tabela → RDF em escala), **SQL**.
+- Formatos: **N-Triples / N-Quads** (volume), Turtle (legibilidade), compressão `.gz`.
+- Particionamento e idempotência (rodar duas vezes = mesmo resultado).
+- **Ingestão incremental** (marca-d'água, hash de linha, delta, "upsert" por named graph).
+- Orquestração (Databricks Jobs/Workflows ou equivalente), logs, métricas e reprocesso.
+- Integração Databricks ⇄ Anzo (arquivos em armazenamento compartilhado; carga via mecanismos do Anzo — **confirmar o método aprovado no ambiente**).
+
+### 6.3 Pilar 3 — Tuning e dimensionamento
+
+**Requisitos**
+- Entender o **modelo de memória** do motor (dados + índices + áreas de trabalho de consultas).
+- Medir: RAM por bilhão de triplas, pico em carga, pico em transformação, concorrência de consultas.
+- Conceitos de **cluster MPP**: distribuição de dados, *shuffle* entre nós, rede, número de nós x memória por nó.
+- Plano de capacidade (hoje, 2026, 2027) e **alertas** (ex.: uso > 70% de RAM).
+- Testes de carga reproduzíveis (benchmark).
+
+### 6.4 Requisitos de ambiente do simulador (máquina de estudo)
+
+| Item | Mínimo | Recomendado |
+|---|---|---|
+| SO | Windows 10/11 | Windows 11 + WSL2 (opcional) |
+| Python | 3.10+ | 3.11+ |
+| RAM | 16 GB | 32 GB |
+| Disco | 20 GB livres | 50 GB livres |
+| Bibliotecas | `faker`, `pyyaml`, `psutil`, `requests`, `rdflib`, `pytest` | + `pyoxigraph` (triple store local), `matplotlib` e `networkx` (gráficos) — já listadas em `requirements.txt` |
+| Triple store local | Embutido no script 10 (pyoxigraph, em memória) | AnzoGraph/Anzo de homologação (se houver acesso) |
+
+> O simulador **não substitui** o Anzo: serve para **aprender, gerar massa de teste e comparar estratégias**. Resultados absolutos de memória devem ser recalibrados no ambiente real.
+
+---
+
+## 7. Estrutura de pastas do simulador
+
+Proposta de estrutura dentro de `simulador_grafos_petrobras/`:
+
+```text
+simulador_grafos_petrobras/
+├── ROADMAP_GRAFOS                    # este documento
+├── README.md                         # como rodar tudo em 5 passos
+├── requirements.txt
+├── .venv/                            # ambiente Python isolado (python -m venv .venv)
+├── config/
+│   ├── escalas.yaml                  # S / M / G (quantidade de registros)
+│   └── namespaces.yaml               # prefixos e base de URIs
+├── data/                             # escalas M/G: SIMULADOR_DADOS=C:\simulador_dados (fora do OneDrive)
+│   ├── raw/                          # bases simuladas em CSV (entrada)
+│   │   ├── rh/
+│   │   ├── contratos/
+│   │   ├── receita/
+│   │   ├── resops/
+│   │   └── ciranda/
+│   ├── rdf/                          # RDF gerado (saída): .nt.gz particionado
+│   └── manifests/                    # controle de lotes (incremental)
+├── ontologies/
+│   ├── parentesco.ttl
+│   ├── receita_federal.ttl
+│   ├── resops.ttl
+│   ├── ciranda.ttl
+│   └── conhecimento_ia.ttl
+├── scripts/
+│   ├── 01_gerar_bases_simuladas.py
+│   ├── 02_csv_para_rdf_streaming.py
+│   ├── 03_particionar_e_comprimir.py
+│   ├── 04_carga_incremental.py
+│   ├── 05_monitor_memoria.py
+│   ├── 06_benchmark_consultas.py
+│   ├── 07_validar_qualidade.py
+│   ├── 08_simular_delta.py           # cria nova versão mensal para testar o incremental
+│   ├── 09_converter_rdflib_em_memoria.py  # anti-padrão didático (compara com o 02)
+│   ├── 10_benchmark_modelos.py       # DESEMPENHO: compara modelos temporais A, A2 e B (pyoxigraph)
+│   ├── 11_gerar_graficos.py          # 7 gráficos PNG em benchmarks/relatorios
+│   ├── rdf_utils.py                  # código compartilhado (URIs, literais, conversores)
+│   └── databricks/
+│       └── notebook_csv_para_rdf.py  # versão PySpark
+├── sparql/
+│   ├── validacao/                    # checagens de qualidade
+│   ├── negocio/                      # conflito de interesse, parentesco...
+│   └── tuning/                       # consultas "boas x ruins"
+├── benchmarks/
+│   ├── resultados/                   # CSVs de tempo e memória
+│   └── relatorios/
+├── docs/
+│   ├── adrs/                         # decisões de arquitetura
+│   ├── diagramas/
+│   ├── runbooks/                     # procedimentos operacionais
+│   └── estudo/                       # anotações de aprendizado
+└── tests/
+    └── test_geracao_rdf.py
+```
+
+**Por que assim?** Separa *entrada* (`data/raw`), *conhecimento* (`ontologies`, `sparql`), *processamento* (`scripts`) e *evidência* (`benchmarks`, `docs`). Isso espelha como a sustentação real vai funcionar.
+
+---
+
+## 8. Bases simuladas
+
+> Todos os dados são **fictícios** (nomes, CPFs e CNPJs gerados aleatoriamente). Nunca copie dados reais (LGPD / confidencialidade) para o simulador.
+
+### 8.1 Escalas
+
+| Escala | Pessoas RH | Empresas | Estabelecimentos | Sócios (vínculos) | Contratos | Uso |
+|---|---|---|---|---|---|---|
+| **S (pequena)** | 1 mil | 10 mil | 12 mil | 25 mil | 2 mil | Aprender e depurar |
+| **M (média)** | 50 mil | 1 milhão | 1,2 milhão | 2,5 milhões | 100 mil | Testar estratégias |
+| **G (grande)** | 120 mil | 10 milhões+ | 12 milhões+ | 25 milhões+ | 500 mil | Estressar memória/carga |
+
+> Referência de ordem de grandeza: a base real da Receita Federal tem **dezenas de milhões** de empresas e estabelecimentos e, somando tudo, algo na casa de **bilhões de triplas** quando convertida para RDF. Esse número é uma **estimativa de trabalho** a ser confirmada com amostra real autorizada.
+
+### 8.2 Esquemas (tabelas CSV)
+
+**`rh/empregados.csv`**
+
+| Coluna | Tipo | Exemplo |
+|---|---|---|
+| `id_empregado` | string | `E0001234` |
+| `cpf` (fictício) | string | `123.456.789-09` |
+| `nome` | string | `Maria Souza` |
+| `lotacao` | string | `ABAST/REFINO` |
+| `cargo` | string | `Analista` |
+| `data_admissao` | date | `2012-03-01` |
+| `data_desligamento` | date/nulo | `` |
+
+**`rh/parentescos.csv`**
+
+| Coluna | Exemplo |
+|---|---|
+| `id_pessoa_a` | `E0001234` |
+| `id_pessoa_b` | `P9988776` |
+| `tipo_parentesco` | `CONJUGE`, `PAI`, `MAE`, `FILHO`, `IRMAO`, `SOGRO`, `CUNHADO` |
+| `grau` | `1` |
+
+**`contratos/contratos.csv`**
+
+| Coluna | Exemplo |
+|---|---|
+| `id_contrato` | `C2024-000321` |
+| `cnpj_basico_fornecedor` | `12345678` |
+| `valor` | `1500000.00` |
+| `data_inicio` / `data_fim` | `2023-01-01` / `2025-12-31` |
+| `id_gestor` | `E0004567` |
+
+**`receita/empresas.csv`** (inspirado no layout público de dados abertos do CNPJ)
+
+| Coluna | Exemplo |
+|---|---|
+| `cnpj_basico` | `12345678` |
+| `razao_social` | `Alfa Serviços Ltda` |
+| `natureza_juridica` | `2062` |
+| `capital_social` | `50000.00` |
+| `porte` | `ME` |
+| `data_atualizacao` | `2025-06-30` |
+
+**`receita/estabelecimentos.csv`**
+
+| Coluna | Exemplo |
+|---|---|
+| `cnpj_basico`, `cnpj_ordem`, `cnpj_dv` | `12345678`, `0001`, `95` |
+| `situacao_cadastral` | `ATIVA`, `BAIXADA`, `SUSPENSA` |
+| `data_situacao` | `2020-04-15` |
+| `cnae_principal` | `4930201` |
+| `uf`, `municipio` | `RJ`, `Rio de Janeiro` |
+
+**`receita/socios.csv`** (o mais importante para o tempo)
+
+| Coluna | Exemplo |
+|---|---|
+| `cnpj_basico` | `12345678` |
+| `id_socio` | `P9988776` |
+| `tipo_socio` | `PF` / `PJ` |
+| `nome_socio` | `João Lima` |
+| `qualificacao` | `Sócio-Administrador` |
+| `data_entrada` | `2018-02-10` |
+| `data_saida` | `2022-07-01` (ou nulo) |
+| `data_referencia` | `2025-06-30` (snapshot da base) |
+
+**`receita/socios_historico.csv`**: mesma estrutura com **várias linhas por sócio** (uma por snapshot mensal) para simular "bases históricas".
+
+**`resops/modelos_reservatorio.csv`** — `id_modelo`, `id_campo`, `versao`, `id_versao_anterior`, `autor`, `data_criacao`, `status`, `hash_conteudo`.
+
+**`ciranda/misturas.csv`** — `id_mistura`, `id_componente`, `percentual`, `propriedade_api`, `teor_enxofre`; e `ciranda/rotas.csv` — `id_navio`, `porto_origem`, `porto_destino`, `capacidade`, `janela_inicio`, `janela_fim`.
+
+**`conhecimento_ia/documentos.csv`** — `id_doc`, `titulo`, `area`, `entidades_citadas`, `data_publicacao`.
+
+### 8.3 "Armadilhas" propositais na massa simulada
+
+Para o simulador ser útil, a geração deve **plantar casos conhecidos**:
+
+| Caso plantado | Para testar |
+|---|---|
+| Empregado cônjuge de sócio de fornecedor com contrato ativo | Detecção de conflito de interesse |
+| Sócio que **saiu antes** do início do contrato | Consulta temporal (não deve alertar) |
+| Empresa com **mudança de sócios** em vários snapshots | Modelo temporal |
+| Registros duplicados e CNPJs inválidos | Qualidade de dados |
+| Concentração: 1 empresa com 50 mil estabelecimentos (nó "hub") | Desempenho com nós muito conectados |
+| Cadeias de parentesco de 3–4 graus | Caminhos / inferência |
+
+---
+
+## 9. Modelagem semântica e temporal
+
+### 9.1 Ontologia de parentesco (exemplo mínimo em Turtle)
+
+```turtle
+@prefix ex:   <http://petrobras.exemplo/onto#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+ex:Pessoa        a owl:Class .
+ex:Empregado     a owl:Class ; rdfs:subClassOf ex:Pessoa .
+ex:Empresa       a owl:Class .
+ex:Contrato      a owl:Class .
+
+# Parentesco: uma relação geral e especializações
+ex:temParente    a owl:ObjectProperty, owl:SymmetricProperty ;
+                 rdfs:domain ex:Pessoa ; rdfs:range ex:Pessoa .
+ex:temConjuge    a owl:ObjectProperty, owl:SymmetricProperty ;
+                 rdfs:subPropertyOf ex:temParente .
+ex:temFilho      a owl:ObjectProperty ; rdfs:subPropertyOf ex:temParente ;
+                 owl:inverseOf ex:temPai .
+ex:temPai        a owl:ObjectProperty ; rdfs:subPropertyOf ex:temParente .
+```
+
+**Em palavras:** "cônjuge" é um tipo de "parente"; "filho" é o inverso de "pai". O motor pode **inferir** parentescos a partir dessas regras (verificar se a inferência está habilitada e o custo de memória dela).
+
+> **Cuidado:** declarar `TransitiveProperty` em `temParente` faria "parente de parente de parente..." virar parente de todo mundo e **explodir o grafo**. Parentesco por grau deve ser **limitado e explícito**.
+
+### 9.2 Formas de modelar o tempo (e como elas se comparam)
+
+**A pergunta a responder:** "quem era sócio da empresa X em março de 2020?" O grafo precisa guardar **quando** cada vínculo valeu. Há três jeitos principais:
+
+| Opção | Como funciona | Vantagem | Desvantagem | Quando usar |
+|---|---|---|---|---|
+| **A. Nó de vínculo com validade** | Cria um nó `ex:ParticipacaoSocietaria` ligando Pessoa e Empresa, com `validoDe`/`validoAte`. Vínculo ainda ativo = **sem** `validoAte` | Consulta natural, guarda a data exata, não copia dados | A consulta precisa de `OPTIONAL` (para "não tem data de fim"), que **pode ficar muito lenta** | Sócios, situação cadastral |
+| **A2. Igual ao A, com data-fim "9999-12-31"** | Vínculo ativo recebe `validoAte = 9999-12-31` (uma data "infinita") | Mesmo modelo do A, mas a consulta **não precisa de `OPTIONAL`** | +1 tripla por vínculo ativo | **Recomendado para a Receita** (ver 9.6) |
+| **B. Named graph por foto mensal** | Cada mês é uma "gaveta" com os vínculos ativos naquele mês | "Quem era sócio em tal mês?" é muito rápido; fácil apagar/recarregar um lote | **Copia** o vínculo em toda foto em que ele está ativo: cresce a cada mês; perde a data exata | Versionamento de modelos (ResOps), auditoria |
+| **C. RDF-star / anotação de aresta** | Anota a própria tripla com datas | Compacto | Menos maduro/suportado conforme a versão | Só se confirmado no ambiente |
+
+**Recomendação inicial:** **A2** para a Receita (fato temporal, histórico exato) + **B** para controle de lote/versão (ResOps e carga incremental). Os números que sustentam isso estão em 9.6; **confirme no ambiente de homologação** antes de fechar.
+
+### 9.3 Exemplo de modelo temporal (opção A)
+
+```turtle
+@prefix ex:  <http://petrobras.exemplo/onto#> .
+@prefix pes: <http://petrobras.exemplo/pessoa/> .
+@prefix emp: <http://petrobras.exemplo/empresa/> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+<http://petrobras.exemplo/participacao/12345678_P9988776_20180210>
+    a ex:ParticipacaoSocietaria ;
+    ex:socio         pes:P9988776 ;
+    ex:empresa       emp:12345678 ;
+    ex:qualificacao  "Sócio-Administrador" ;
+    ex:validoDe      "2018-02-10"^^xsd:date ;
+    ex:validoAte     "2022-07-01"^^xsd:date .
+```
+
+**Como ler:** o nó do meio (`.../participacao/...`) é o "vínculo". Ele aponta para a pessoa, aponta para a empresa e carrega o período em que o vínculo valeu. Para o modelo **A2**, um vínculo ainda ativo teria `ex:validoAte "9999-12-31"^^xsd:date`.
+
+**Dica de URI:** o identificador do vínculo é **determinístico** (`cnpj_pessoa_datainício`). Assim, carregar o mesmo dado duas vezes **não duplica** nada (idempotência — essencial para incremental).
+
+### 9.4 Consultas SPARQL de exemplo
+
+**a) Quem era sócio da empresa em 2020-03-01?**
+
+```sparql
+PREFIX ex:  <http://petrobras.exemplo/onto#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+SELECT ?socio ?empresa
+WHERE {
+  ?p a ex:ParticipacaoSocietaria ;
+     ex:socio ?socio ;
+     ex:empresa ?empresa ;
+     ex:validoDe ?de .
+  OPTIONAL { ?p ex:validoAte ?ate }
+  FILTER (?de <= "2020-03-01"^^xsd:date &&
+          (!BOUND(?ate) || ?ate >= "2020-03-01"^^xsd:date))
+}
+```
+
+**b) Conflito de interesse (núcleo do Synapse ampliado):** empregado com parente sócio de fornecedor com contrato vigente na época em que o parente era sócio.
+
+```sparql
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+SELECT ?empregado ?parente ?empresa ?contrato
+WHERE {
+  ?empregado a ex:Empregado ;
+             ex:temParente ?parente .
+  ?p a ex:ParticipacaoSocietaria ;
+     ex:socio ?parente ;
+     ex:empresa ?empresa ;
+     ex:validoDe ?pDe .
+  OPTIONAL { ?p ex:validoAte ?pAte }
+  ?contrato a ex:Contrato ;
+            ex:fornecedor ?empresa ;
+            ex:vigenciaInicio ?cDe ;
+            ex:vigenciaFim ?cAte .
+  # sobreposição de períodos: sócio ativo durante o contrato
+  FILTER (?pDe <= ?cAte && (!BOUND(?pAte) || ?pAte >= ?cDe))
+}
+```
+
+**Como ler:** "ache empregado → parente → participação societária → empresa → contrato, e só mantenha se os períodos se sobrepõem."
+
+**c) Checagem de qualidade (CNPJ com mais de uma razão social no mesmo snapshot):**
+
+```sparql
+PREFIX ex: <http://petrobras.exemplo/onto#>
+SELECT ?empresa (COUNT(DISTINCT ?nome) AS ?qtd)
+WHERE { ?empresa ex:razaoSocial ?nome }
+GROUP BY ?empresa
+HAVING (COUNT(DISTINCT ?nome) > 1)
+```
+
+### 9.5 Padrões por frente (visão inicial)
+
+| Frente | Padrão de modelagem sugerido |
+|---|---|
+| **Synapse / Receita** | Nó de vínculo temporal (A) + graph por lote (B) |
+| **ResOps** | Cadeia de versões: `ex:ModeloVersao` com `ex:versaoAnterior`; cada versão imutável; *named graph* por versão/commit |
+| **Ciranda** | Componentes, misturas e percentuais como nós (`ex:ComposicaoItem` com `ex:percentual`); navios, portos e janelas como nós; rotas como arestas com atributos |
+| **Conhecimento p/ IA** | Entidades + relações + **proveniência** (de qual documento/fonte veio, grau de confiança); URIs estáveis para facilitar *grounding* de agentes |
+
+---
+
+## 10. Scripts simulados
+
+> Os scripts **já estão prontos** na pasta `scripts/`. Esta seção explica **o que cada um faz e por que existe**; para ver o código completo, abra o arquivo indicado. A ideia é você rodar, quebrar, medir e entender.
+
+### 10.0 Preparando o ambiente (uma vez só)
+
+```powershell
+python -m venv .venv                                    # cria a "caixinha" do projeto
+.\.venv\Scripts\python -m pip install -r requirements.txt   # instala as bibliotecas dentro dela
+```
+
+- **O que é a `.venv`?** Uma pasta com um Python e bibliotecas **só deste projeto**, para não bagunçar o Python do computador. Sempre rode os scripts com `.\.venv\Scripts\python ...`.
+- **Escalas M e G geram GBs de dados.** Como esta pasta fica no OneDrive (que sincroniza tudo), mande os dados para fora dela:
+
+```powershell
+$env:SIMULADOR_DADOS = "C:\simulador_dados"   # vale só para a janela do PowerShell aberta
+```
+
+Todos os scripts passam a ler e gravar `raw/`, `rdf/` e `manifests/` nessa pasta. Os resultados e gráficos continuam em `benchmarks/`.
+
+### 10.1 Qual script rodar e em que ordem
+
+```mermaid
+flowchart LR
+    A["01 gerar bases<br/>(CSV fictício)"] --> B["02 converter<br/>CSV → RDF"]
+    B --> C["07 validar<br/>qualidade"]
+    A --> D["10 benchmark<br/>modelos temporais"]
+    D --> E["11 gráficos<br/>(PNG)"]
+    B -.opcional.-> F["08 simular delta<br/>→ 04 carga incremental"]
+    B -.opcional.-> G["05 monitor de memória<br/>(+ 09 anti-padrão)"]
+```
+
+| # | Script | Pergunta que ele ajuda a responder | Como rodar (escala S) |
+|---|---|---|---|
+| 01 | `01_gerar_bases_simuladas.py` | "Preciso de dados de teste, mas sem dados reais." Gera CSVs fictícios **e casos plantados** com resultado conhecido | `python scripts/01_gerar_bases_simuladas.py S` |
+| 02 | `02_csv_para_rdf_streaming.py` | "Como transformo tabela em triplas sem estourar a memória?" | `python scripts/02_csv_para_rdf_streaming.py` |
+| 03 | `03_particionar_e_comprimir.py` | "E se o arquivo RDF já vier gigante?" Divide em partes `.gz` | `python scripts/03_particionar_e_comprimir.py ARQUIVO` |
+| 04 | `04_carga_incremental.py` | "Como carrego só o que mudou?" Separa novo / alterado / removido | `python scripts/04_carga_incremental.py --entidade socios --lote 2026-06` |
+| 05 | `05_monitor_memoria.py` | "Quanta RAM esse comando consome?" | `python scripts/05_monitor_memoria.py ROTULO COMANDO...` |
+| 06 | `06_benchmark_consultas.py` | "Quanto tempo leva cada consulta em um endpoint SPARQL?" | `python scripts/06_benchmark_consultas.py` |
+| 07 | `07_validar_qualidade.py` | "O RDF gerado está correto?" | `python scripts/07_validar_qualidade.py` |
+| 08 | `08_simular_delta.py` | "Preciso de uma versão mensal nova para testar o incremental" | `python scripts/08_simular_delta.py --pct 5` |
+| 09 | `09_converter_rdflib_em_memoria.py` | **Anti-padrão didático:** mostra o que acontece quando tudo vai para a RAM | `python scripts/09_converter_rdflib_em_memoria.py` |
+| 10 | `10_benchmark_modelos.py` | **"Qual modelo temporal tem melhor desempenho?"** (seção 9.6) | `python scripts/10_benchmark_modelos.py --escala S` |
+| 11 | `11_gerar_graficos.py` | "Me mostre em figuras" (seção 10.7) | `python scripts/11_gerar_graficos.py --escala S` |
+
+> Código compartilhado (URIs, literais, conversores de cada tabela): `scripts/rdf_utils.py`.
+
+### 10.2 A ideia central do script 02: escrever triplas linha a linha
+
+**Problema:** se você carrega o CSV inteiro em memória, monta o grafo inteiro em memória e só depois grava, a RAM cresce junto com os dados — é exatamente o sintoma que vocês têm hoje.
+
+**Solução:** ler **uma linha do CSV**, gerar suas triplas, **gravar no disco** e esquecer. A memória fica praticamente constante, não importa o tamanho do arquivo.
+
+O coração da conversão de sócios (trecho de `rdf_utils.py`):
+
+```python
+def _tri_socio(r):
+    s = _suj_socio(r)   # URI do vínculo: participacao/<cnpj>_<pessoa>_<data de entrada>
+    yield _t(s, "ParticipacaoSocietaria")                     # "este nó é um vínculo societário"
+    yield (s, onto("socio"),  uri("pessoa", r["id_socio"]))   # quem é o sócio
+    yield (s, onto("empresa"), uri("empresa", r["cnpj_basico"]))  # de qual empresa
+    yield (s, onto("nomeSocio"), lit(r["nome_socio"]))
+    yield (s, onto("qualificacao"), lit(r["qualificacao"]))
+    yield (s, onto("validoDe"), lit(r["data_entrada"], "date"))   # início do vínculo
+    yield from _opt(s, r, "data_saida", "validoAte", "date")      # fim (se já saiu)
+```
+
+**Por que N-Triples (`.nt`)?** Cada linha é uma tripla completa e independente. O arquivo pode ser **cortado em pedaços** e carregado **em paralelo**. Turtle, por ter prefixos e agrupamentos, é difícil de dividir.
+
+**Por que a URI do vínculo é "determinística"?** Ela é montada a partir dos próprios dados (`cnpj_pessoa_dataEntrada`). Carregar o mesmo dado duas vezes gera **a mesma URI**, então nada duplica (idempotência) — essencial para o incremental.
+
+### 10.3 Casos plantados: como saber se a consulta acertou?
+
+O script 01 sempre cria alguns casos com resposta conhecida (gabarito em `data/raw/casos_plantados.json`). Ex.: "o contrato `CX-0002` **não** deve gerar alerta, porque o sócio saiu antes". Se a consulta de conflito de interesse listar o `CX-0002`, ela está **errada** — mesmo que ninguém reclame. É assim que se testa lógica temporal.
+
+### 10.4 Memória: streaming x tudo-em-RAM (scripts 05 e 09)
+
+```powershell
+.\.venv\Scripts\python scripts/05_monitor_memoria.py streaming .\.venv\Scripts\python scripts/02_csv_para_rdf_streaming.py --entidade socios
+.\.venv\Scripts\python scripts/05_monitor_memoria.py rdflib    .\.venv\Scripts\python scripts/09_converter_rdflib_em_memoria.py
+```
+
+O gráfico `06_memoria_na_conversao.png` mostra os dois lado a lado: **linha reta = streaming** (bom); **subida contínua = tudo na RAM** (o problema). Rode na escala M para o contraste ficar óbvio.
+
+### 10.5 Consultas "boas x ruins" (pasta `sparql/tuning/`)
+
+Cada par faz **a mesma pergunta** (mesmo resultado) escrita de duas formas. O script 10 mede o tempo de todos e o gráfico 04 compara.
+
+| Consulta "ruim" | Versão "boa" | O que se aprende |
+|---|---|---|
+| Calcula `OPTIONAL` para a base inteira e só no fim filtra a empresa | Filtra a empresa primeiro, `OPTIONAL` depois | Ordem reduz resultados intermediários |
+| `ex:temParente*` (caminho ilimitado) | Caminho com grau explícito (até 3 graus) | Evitar explosão de caminhos (em base pequena a diferença quase não aparece; em base grande e densa, sim) |
+| `SELECT *` sem `LIMIT` | `SELECT` só das variáveis necessárias + `LIMIT` | Menos dados trafegados |
+| `INSERT ... WHERE` em toda a base (`04_transformacao_fatiada.ru`) | Mesmo `INSERT` por fatia (dígito do CNPJ 0 a 9) | Fatiar transformações pesadas (não é medido pelo script; pratique no triple store) |
+
+### 10.6 Validação de qualidade (script 07)
+
+- Todas as URIs seguem o padrão (`/pessoa/`, `/empresa/`, `/participacao/`).
+- Toda `ParticipacaoSocietaria` possui `socio`, `empresa` e `validoDe`.
+- `validoAte` >= `validoDe`.
+- Nenhum literal de data fora do formato `xsd:date`.
+- Contagem de triplas por arquivo bate com o manifesto do lote.
+
+**O esperado é ele ENCONTRAR 2 problemas**: o CNPJ inválido `1234567` e o sócio com saída anterior à entrada — ambos plantados de propósito. Se não achar, o validador é que está com defeito.
+
+### 10.7 Gráficos (script 11 → `benchmarks/relatorios/`)
+
+| Arquivo | Pergunta simples que responde |
+|---|---|
+| `01_triplas_e_memoria_por_modelo_<escala>.png` | Quantas triplas e quanta memória cada modelo temporal usa? |
+| `02_tempo_consultas_por_modelo_<escala>.png` | Qual modelo responde mais rápido a cada pergunta? |
+| `03_custo_do_modelo_B_por_fotos_<escala>.png` | O que acontece com o modelo B quando aumentam as fotos mensais? |
+| `04_tuning_ruim_vs_bom_<escala>.png` | Quanto custa escrever a consulta "do jeito ruim"? |
+| `05_projecao_de_memoria.png` | Quanta memória seria necessária para 1 e 2 bilhões de triplas? (reta de referência, a calibrar) |
+| `06_memoria_na_conversao.png` | Streaming x tudo-em-RAM na conversão para RDF |
+| `07_grafo_casos_plantados.png` | Desenho das relações (empregado → parente → sócio → empresa → contrato) |
+
+> **Como ler os gráficos de tempo:** o eixo vertical é **logarítmico**. Cada "degrau" para cima é **10 vezes** mais lento. Uma barra dois degraus acima da outra é 100 vezes pior.
+
+---
+
+## 11. Ingestão incremental e Databricks
+
+### 11.1 Fluxo de ponta a ponta
+
+```mermaid
+flowchart LR
+    A[Fonte<br/>Receita / RH / Contratos] --> B[Databricks<br/>Delta Lake]
+    B --> C[Detecta delta<br/>hash ou data_atualizacao]
+    C --> D[Gera RDF<br/>N-Triples/N-Quads .gz<br/>particionado]
+    D --> E[Armazenamento<br/>compartilhado]
+    E --> F[Carga no Anzo<br/>named graph por lote]
+    F --> G[Transformações SPARQL<br/>fatiadas por partição]
+    G --> H[Validação<br/>consultas de qualidade]
+    H --> I[(Consumo<br/>Synapse · IA · BI)]
+    D -.manifesto.-> J[(manifests/<br/>lote, contagem, hash)]
+    F -.registra.-> J
+```
+
+### 11.2 Estratégia incremental (passo a passo)
+
+1. **Detectar mudanças:** compare `data_atualizacao` ou um **hash da linha** com o último lote.
+2. **Classificar:** `novo`, `alterado`, `removido`.
+3. **Gerar RDF só do delta**, em partes (ex.: 500 mil linhas por arquivo).
+4. **Carregar em named graph do lote** (ex.: `graph:rf/2026-06/delta-001`).
+5. **Para alterados/removidos:** remover as triplas antigas daquela entidade (`DELETE WHERE` direcionado por chave) antes de inserir as novas.
+6. **Registrar manifesto:** nº de triplas, hash, data, status — permite **reprocessar** e **auditar**.
+7. **Idempotência:** URIs determinísticas + manifestos garantem que repetir um lote é seguro.
+
+```sparql
+# Substituir uma participação alterada (exemplo conceitual)
+DELETE WHERE { <http://petrobras.exemplo/participacao/12345678_P9988776_20180210> ?p ?o } ;
+INSERT DATA  { GRAPH <http://petrobras.exemplo/graph/rf/2026-06/delta-001> { ...novas triplas... } }
+```
+
+### 11.3 Notebook Databricks (PySpark) — gera RDF distribuído
+
+Arquivo pronto: `scripts/databricks/notebook_csv_para_rdf.py` (importe como notebook no Databricks; **ainda não testado no ambiente real**).
+
+**Ideia em linguagem simples:** o Spark divide a tabela de sócios em muitos pedaços e cada pedaço vira um arquivo de triplas `.gz`, **em paralelo**, sem nunca juntar tudo em uma só máquina. Cada linha da tabela vira ~7 linhas de texto (as triplas) já com o *named graph* do lote:
+
+```text
+<.../participacao/12345678_P1_20180210> <.../onto#validoDe> "2018-02-10"^^<...#date> <.../graph/socios/2026-06> .
+```
+
+**Pontos de atenção:**
+- Escape de aspas, barras e quebras de linha nos textos (senão o arquivo RDF fica inválido).
+- `repartition(N)` define quantos arquivos saem (e quantos podem ser carregados em paralelo no Anzo).
+- Valores vazios (sócio ainda ativo, sem `validoAte`) **não geram tripla** — o notebook trata isso.
+- **Nunca** use `collect()` nem `toPandas()` para gerar RDF: isso traz tudo para uma máquina e volta ao problema de memória.
+- A extensão final dos arquivos (`.nq.gz`) pode precisar de ajuste conforme o carregador do Anzo exigir.
+
+---
+
+## 12. Tuning e dimensionamento (memória e cluster)
+
+### 12.1 Como estimar memória (método simples e honesto)
+
+$$
+\text{RAM}_{necessária} \approx N_{triplas} \times B_{tripla} \times F_{trabalho}
+$$
+
+- $N_{triplas}$: contagem estimada (tabela abaixo).
+- $B_{tripla}$: **bytes por tripla em memória, medido** no ambiente (depende de índices e do dicionário de strings) — **não chute: meça** com uma amostra.
+- $F_{trabalho}$: fator para áreas de trabalho de consultas/transformações e carga (ex.: 1,5 a 3). **Calibrar** com os benchmarks.
+
+**Estimativa de triplas (ordem de grandeza)** = linhas × propriedades por linha:
+
+| Entidade | Linhas (real, aprox.) | Triplas/linha | Triplas |
+|---|---|---|---|
+| Empresas | dezenas de milhões | ~8 | centenas de milhões |
+| Estabelecimentos | dezenas de milhões | ~15 | ~1 bilhão |
+| Sócios (vínculos temporais) | dezenas de milhões | ~7 | centenas de milhões |
+| **Total (sem histórico)** | | | **~1–2 bilhões** |
+| **Com N snapshots históricos** | | | **multiplica conforme o modelo temporal** |
+
+> Esse último ponto é o que mais pesa: modelar histórico "copiando snapshots" multiplica por N; modelar com **intervalos de validade** só acrescenta quando algo **muda**.
+
+### 12.2 Experimentos de dimensionamento (executar no simulador e no ambiente de homologação)
+
+| ID | Experimento | Variáveis | Métrica | Pergunta respondida |
+|---|---|---|---|---|
+| EXP-01 | Curva RAM x triplas | escalas S/M/G | MB por milhão de triplas | Quanto custa cada tripla? |
+| EXP-02 | Carga 1 arquivo x N partes | nº de partes | pico de RAM, tempo | Paralelizar ajuda? |
+| EXP-03 | Transformação inteira x fatiada | nº de fatias | pico de RAM, tempo | Fatiar evita falha? |
+| EXP-04 | Modelo temporal A x B | modelo | triplas, RAM, tempo de consulta | Qual modelo é mais econômico? |
+| EXP-05 | Full load x incremental | % de mudança mensal | tempo, pico de RAM | Quanto o incremental economiza? |
+| EXP-06 | Consultas boas x ruins | consulta | tempo, RAM de trabalho | Quais padrões proibir? |
+| EXP-07 | Concorrência | nº de usuários simultâneos | latência, RAM | Capacidade para vários times |
+| EXP-08 | Nós hub | grau do nó | tempo | Efeito de supernós |
+
+**O que já está automatizado no simulador:**
+
+| Experimento | Script | Gráfico |
+|---|---|---|
+| EXP-01 (RAM x triplas) | `10_benchmark_modelos.py` (escalas S, M, G) | `05_projecao_de_memoria.png` |
+| EXP-04 (modelos A, A2, B) | `10_benchmark_modelos.py`; `--varredura` para o custo do B | `01`, `02` e `03` |
+| EXP-06 (consultas boas x ruins) | `10_benchmark_modelos.py` (pasta `sparql/tuning`) | `04_tuning_ruim_vs_bom_<escala>.png` |
+| Streaming x tudo-em-RAM | `05` + `02` + `09` | `06_memoria_na_conversao.png` |
+| EXP-05 (incremental) | `08` + `04` (conta novo / alterado / removido) | — |
+
+Os demais (EXP-02, 03, 07 e 08) exigem um triple store real e ficam para o ambiente de homologação.
+
+### 12.3 Avaliação de topologia em cluster
+
+**Ideia intuitiva:** em vez de uma máquina enorme, dividir os dados entre **várias máquinas** que trabalham juntas (somam a memória e o processamento). Em troca, aparece **tráfego de rede** entre os nós e mais complexidade operacional.
+
+| Critério | Single node (vertical) | Cluster (horizontal) |
+|---|---|---|
+| Teto de memória | Limitado pela maior máquina | Soma dos nós |
+| Complexidade operacional | Baixa | Média/alta |
+| Custo | Cresce rápido nas máquinas grandes | Mais granular |
+| Risco | Ponto único de falha | Rede/distribuição dos dados |
+| Indicado quando | Volume cabe com folga | Volume > capacidade de um nó ou crescimento 2027 |
+
+**Perguntas para a decisão (ADR):**
+1. O volume projetado para 2027 (todas as frentes **somadas**) cabe em um nó com folga ≥ 30%?
+2. Há consultas que sofrem com *shuffle* em cluster (joins entre muitos nós)?
+3. Como isolar **cargas pesadas** (Receita) de **consultas interativas** (IA, Synapse)?
+4. Qual o plano de contingência (backup, restauração, janela de manutenção)?
+5. Qual o custo total (infra + operação) x ganho?
+
+### 12.4 Monitoramento e alertas sugeridos
+
+| Indicador | Alerta |
+|---|---|
+| Uso de RAM do motor | amarelo 70% · vermelho 85% |
+| Pico de RAM por carga/transformação | comparar com baseline do último lote |
+| Tempo de carga por milhão de triplas | desvio > 30% |
+| Consultas > X min | listar e investigar |
+| Nº de triplas por graph/lote | confere com manifesto |
+
+---
+
+## 13. Roadmap por fases
+
+```mermaid
+gantt
+    title Roadmap Grafos Petrobras (visão em fases)
+    dateFormat  YYYY-MM-DD
+    axisFormat  %b/%y
+    section Fase 0 · Fundamentos
+    Estudo de RDF/SPARQL/OWL e levantamento       :f0, 2026-11-16, 14d
+    section Fase 1 · Simulador
+    Pastas, bases S/M e scripts 01-02             :f1, after f0, 21d
+    section Fase 2 · Diagnóstico
+    Benchmarks EXP-01 a EXP-06                    :f2, after f1, 28d
+    section Fase 3 · Solução
+    Pipeline Databricks + incremental             :f3, after f2, 42d
+    section Fase 4 · Arquitetura
+    Dimensionamento 2027 e ADR de cluster         :f4, after f2, 42d
+    section Fase 5 · Sustentação
+    Runbooks, monitoramento, transferência        :f5, after f3, 30d
+```
+
+> As datas são **ilustrativas**, só para dar sequência; ajuste conforme o planejamento oficial do projeto.
+
+### Fase 0 — Fundamentos e levantamento
+**Objetivo:** entender o ambiente e nivelar o conhecimento.
+- [ ] Ler este roadmap e o glossário (seção 2).
+- [ ] Levantar com o time: versão do Anzo, topologia atual, RAM disponível, métodos de carga em uso.
+- [ ] Obter **ontologia atual do Synapse** e as transformações (steps) existentes.
+- [ ] Identificar **onde exatamente** ocorre a falha de memória (qual etapa, qual volume, qual mensagem).
+- [ ] Listar fontes, donos, frequência de atualização.
+- **Saída:** documento de situação atual + lista de perguntas respondidas (seção 15).
+
+### Fase 1 — Simulador e bases
+**Objetivo:** ter um laboratório reproduzível.
+- [x] Criar a estrutura de pastas e a `.venv` (seções 7 e 10.0).
+- [x] Scripts `01` (gerar bases S/M/G) e `02` (CSV → RDF em streaming) prontos.
+- [x] Triple store local em memória (pyoxigraph) usado pelo script `10` — não precisa instalar servidor.
+- [x] Casos plantados com gabarito (seção 10.3) e consultas da seção 9.4 em `sparql/`.
+- [ ] **Você:** rodar a escala S de ponta a ponta e abrir cada gráfico de `benchmarks/relatorios/` (seção 10.7).
+- **Saída:** simulador rodando; primeiras consultas respondendo corretamente.
+
+### Fase 2 — Diagnóstico com evidências
+**Objetivo:** provar **onde e por que** a memória acaba e o desempenho cai.
+- [x] EXP-04 (modelos temporais A, A2 e B) e EXP-06 (consultas boas x ruins): scripts prontos e resultados da escala S/M em 9.6.
+- [ ] EXP-01 a EXP-03, EXP-05, EXP-07 e EXP-08 (seção 12.2) e registrar em `benchmarks/`.
+- [ ] Repetir os experimentos no **ambiente de homologação** (os números do simulador servem só para comparar opções entre si).
+- **Saída:** relatório "Causas e ganhos esperados por mitigação" (priorizado).
+### Fase 3 — Solução de engenharia de dados
+**Objetivo:** pipeline estável, incremental e escalável.
+- [ ] Implementar geração de RDF distribuída no Databricks (11.3).
+- [ ] Particionamento, manifestos e idempotência (11.2).
+- [ ] Fatiar as transformações SPARQL pesadas.
+- [ ] Automatizar validações de qualidade (10.5).
+- [ ] Testar no ambiente de homologação com volume próximo do real.
+- **Saída:** carga completa e incremental da Receita sem estouro de memória.
+
+### Fase 4 — Arquitetura e dimensionamento (em paralelo à Fase 3)
+**Objetivo:** decisão fundamentada sobre capacidade e topologia.
+- [ ] Consolidar volumetria projetada das 5 frentes (tabela da seção 5).
+- [ ] Rodar EXP-07 e EXP-08.
+- [ ] Redigir ADR: **single node ampliado x cluster** (12.3).
+- [ ] Definir isolamento de ambientes/cargas e política de uso.
+- **Saída:** proposta de arquitetura com custo, riscos e plano de migração.
+
+### Fase 5 — Sustentação e melhoria contínua
+**Objetivo:** o conhecimento fica com a Petrobras e o ambiente permanece saudável.
+- [ ] Runbooks: carga, reprocesso, falha de memória, restauração.
+- [ ] Painel de monitoramento e alertas (12.4).
+- [ ] Guia de modelagem (URIs, temporal, parentesco, ResOps, Ciranda, IA).
+- [ ] Sessões curtas de transferência de conhecimento.
+- [ ] Revisão trimestral de capacidade e backlog de melhorias.
+- **Saída:** operação sustentável, documentada e mensurável.
+
+### Entregáveis por frente (resumo)
+
+| Frente | Entregáveis principais |
+|---|---|
+| Synapse + Receita | Ontologia temporal, pipeline incremental, consultas de conflito de interesse, relatório de capacidade |
+| ResOps | Modelo de versionamento, política de *named graphs*, plano de backup/restauração, testes de escrita |
+| Ciranda | Ontologia de misturas e rotas, consultas de composição, dados simulados de navios |
+| Conhecimento p/ IA | Padrão de entidades + proveniência, URIs estáveis, consultas "para agentes", estimativa de crescimento 2027 |
+| Arquitetura | ADR de topologia, benchmarks, plano de monitoramento |
+
+---
+
+## 14. Plano de estudo
+
+Ordem sugerida (do básico ao avançado), sempre com **prática no simulador**:
+
+| Semana | Tema | Prática |
+|---|---|---|
+| 1 | Triplas, URIs, literais, Turtle | Escrever à mão 20 triplas sobre pessoas e empresas |
+| 2 | SPARQL básico (SELECT, FILTER, OPTIONAL, GROUP BY) | Resolver as consultas 9.4 na escala S |
+| 3 | RDFS/OWL (classes, subpropriedades, inversas) | Evoluir a ontologia de parentesco |
+| 4 | Modelagem temporal (A, B, C) | Montar o mesmo dado nos 3 modelos e comparar |
+| 5 | Geração de RDF em escala (streaming, N-Triples, partições) | Rodar scripts 02 e 05 na escala M |
+| 6 | SPARQL Update e incremental | Simular delta mensal com `DELETE/INSERT` |
+| 7 | Databricks/PySpark para RDF | Adaptar o notebook 11.3 |
+| 8 | Memória, benchmarks e cluster | Executar EXP-01 a EXP-06 e escrever a conclusão |
+
+**Dica:** a cada semana, escreva em `docs/estudo/` uma página: *"o que aprendi / o que me confundiu / como explicaria para um colega"*.
+
+---
+
+## 15. Riscos, critérios de aceite e perguntas em aberto
+
+### 15.1 Riscos
+
+| Risco | Impacto | Mitigação |
+|---|---|---|
+| Modelo temporal mal escolhido multiplica o volume | Alto | Benchmark EXP-04 antes de fechar o modelo |
+| Falta de acesso a ambiente de homologação com volume real | Alto | Simulador em escala G + amostras autorizadas |
+| Dados sensíveis (LGPD) usados indevidamente | Alto | Só dados simulados fora do ambiente aprovado |
+| Dependência de conhecimento em poucas pessoas | Médio | Runbooks, ADRs e sessões de transferência |
+| Crescimento 2027 (IA) subestimado | Médio | Revisão trimestral de capacidade |
+| Divergência entre método de carga do simulador e do Anzo real | Médio | Validar cedo o método aprovado de carga |
+
+### 15.2 Critérios de aceite (como saberemos que deu certo)
+
+- [ ] Carga completa da Receita Federal **sem falha de memória**, com folga de RAM definida.
+- [ ] Carga incremental mensal executa em tempo e memória **dentro do baseline** acordado.
+- [ ] Consulta de conflito de interesse retorna os **casos plantados** e **nenhum falso positivo** temporal.
+- [ ] ADR de arquitetura aprovado (com números dos benchmarks).
+- [ ] Runbooks testados por alguém que **não** os escreveu.
+- [ ] Monitoramento com alertas em funcionamento.
+
+### 15.3 Perguntas em aberto (levar para a primeira reunião)
+
+1. Qual a **versão** do Anzo/AnzoGraph e a configuração atual (nós, RAM por nó)?
+2. A falha de memória ocorre na **carga**, em **qual transformação** e com que volume?
+3. Como é feita hoje a carga (formato, tamanho dos arquivos, ferramenta)?
+4. Existe **inferência/reasoning** habilitado? Qual o custo em memória?
+5. A ontologia de parentesco atual tem modelo temporal? Como são os *named graphs*?
+6. Qual a **janela de atualização** da Receita (mensal?) e quanto muda entre ciclos?
+7. Há ambiente de **homologação** com capacidade similar à produção?
+8. Qual o método aprovado de integração **Databricks → Anzo**?
+9. Quem são os **donos** de cada frente (IEMSI, ResOps, Ciranda, TIC/DAIA) e os níveis de acesso?
+10. Qual a **expectativa de volume 2027** do time de IA, em número de entidades/documentos?
+11. Quais são os SLAs esperados (latência de consulta, disponibilidade, janela de carga)?
+12. Existem políticas de **segurança/LGPD** específicas para dados de sócios e parentesco?
+
+---
+
+## Próximo passo imediato
+
+1. Rodar o simulador na escala **S** (comandos na seção 10.1 e no `README.md`).
+2. Abrir os gráficos em `benchmarks/relatorios/` e ler a seção 9.6 ao lado, **entendendo cada barra**.
+3. Rodar as consultas de 9.4 (pasta `sparql/`) e conferir cada resultado com o gabarito (seção 10.3).
+4. Levar a lista da seção 15.3 para o time da Petrobras e pedir acesso a um ambiente de homologação para repetir os benchmarks no AnzoGraph real.

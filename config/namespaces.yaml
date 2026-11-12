@@ -1,0 +1,10 @@
+# Base de todas as URIs do simulador. A ontologia fica em <base>/onto#
+base: http://petrobras.exemplo
+prefixos:
+  ex: http://petrobras.exemplo/onto#
+  pes: http://petrobras.exemplo/pessoa/
+  emp: http://petrobras.exemplo/empresa/
+  est: http://petrobras.exemplo/estabelecimento/
+  part: http://petrobras.exemplo/participacao/
+  ctr: http://petrobras.exemplo/contrato/
+  xsd: http://www.w3.org/2001/XMLSchema#

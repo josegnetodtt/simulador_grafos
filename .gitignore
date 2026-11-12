@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+.pytest_cache/
+data/raw/*/
+data/rdf/*/
+data/manifests/*
+benchmarks/resultados/*
+!**/.gitkeep

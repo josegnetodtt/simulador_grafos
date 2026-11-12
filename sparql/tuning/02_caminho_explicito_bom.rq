@@ -1,0 +1,8 @@
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+# BOM: no máximo 3 graus, explícitos.
+SELECT DISTINCT ?parente
+WHERE {
+  <http://petrobras.exemplo/pessoa/EX000004>
+    (ex:temParente | ex:temParente/ex:temParente | ex:temParente/ex:temParente/ex:temParente) ?parente
+}

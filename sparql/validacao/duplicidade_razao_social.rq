@@ -1,0 +1,7 @@
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+# Empresas com mais de uma razão social (caso plantado: 00000004).
+SELECT ?empresa (COUNT(DISTINCT ?nome) AS ?qtd)
+WHERE { ?empresa ex:razaoSocial ?nome }
+GROUP BY ?empresa
+HAVING (COUNT(DISTINCT ?nome) > 1)

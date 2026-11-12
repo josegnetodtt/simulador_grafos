@@ -1,0 +1,12 @@
+@prefix ex:   <http://petrobras.exemplo/onto#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# Conhecimento para agentes de IA: documentos que mencionam entidades, sempre com proveniência (ex:fonte).
+
+ex:Documento       a owl:Class .
+ex:titulo          a owl:DatatypeProperty ; rdfs:domain ex:Documento .
+ex:area            a owl:DatatypeProperty ; rdfs:domain ex:Documento .
+ex:dataPublicacao  a owl:DatatypeProperty ; rdfs:domain ex:Documento .
+ex:fonte           a owl:DatatypeProperty ; rdfs:domain ex:Documento .
+ex:menciona        a owl:ObjectProperty   ; rdfs:domain ex:Documento .

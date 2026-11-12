@@ -1,0 +1,31 @@
+# Quantidade de registros por escala. S = aprender/depurar, M = testar estratégias, G = estressar memória.
+S:
+  empresas: 10000
+  pessoas: 20000
+  empregados: 1000
+  contratos: 2000
+  modelos: 200
+  misturas: 300
+  navios: 50
+  documentos: 500
+  hub_estabelecimentos: 2000
+M:
+  empresas: 1000000
+  pessoas: 1500000
+  empregados: 50000
+  contratos: 100000
+  modelos: 5000
+  misturas: 10000
+  navios: 500
+  documentos: 20000
+  hub_estabelecimentos: 9999
+G:
+  empresas: 10000000
+  pessoas: 15000000
+  empregados: 120000
+  contratos: 500000
+  modelos: 20000
+  misturas: 50000
+  navios: 2000
+  documentos: 100000
+  hub_estabelecimentos: 9999

@@ -1,0 +1,21 @@
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+# Conflito de interesse (parentesco direto): empregado com parente sócio de fornecedor,
+# com o vínculo societário sobreposto à vigência do contrato.
+# Esperado entre os casos plantados: CX-0001 e CX-0004 (CX-0002 e CX-0003 NÃO devem aparecer).
+SELECT DISTINCT ?empregado ?parente ?empresa ?contrato
+WHERE {
+  ?empregado a ex:Empregado ;
+             ex:temParente ?parente .
+  ?p a ex:ParticipacaoSocietaria ;
+     ex:socio ?parente ;
+     ex:empresa ?empresa ;
+     ex:validoDe ?pDe .
+  OPTIONAL { ?p ex:validoAte ?pAte }
+  ?contrato a ex:Contrato ;
+            ex:fornecedor ?empresa ;
+            ex:vigenciaInicio ?cDe ;
+            ex:vigenciaFim ?cAte .
+  # períodos se sobrepõem: sócio já entrou até o fim do contrato e ainda não saiu antes do início
+  FILTER (?pDe <= ?cAte && (!BOUND(?pAte) || ?pAte >= ?cDe))
+}

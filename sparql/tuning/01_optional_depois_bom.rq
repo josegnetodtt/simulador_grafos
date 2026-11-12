@@ -1,0 +1,12 @@
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+# BOM: empresa fixada primeiro; OPTIONAL só depois, sobre um conjunto já pequeno.
+SELECT ?p ?socio ?empresa ?ate ?q ?n
+WHERE {
+  ?p ex:empresa <http://petrobras.exemplo/empresa/99999993> ;
+     ex:socio ?socio .
+  BIND (<http://petrobras.exemplo/empresa/99999993> AS ?empresa)
+  OPTIONAL { ?p ex:validoAte ?ate }
+  OPTIONAL { ?p ex:qualificacao ?q }
+  OPTIONAL { ?p ex:nomeSocio ?n }
+}

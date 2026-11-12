@@ -1,0 +1,36 @@
+@prefix ex:   <http://petrobras.exemplo/onto#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# Receita Federal com tempo: o vínculo sócio-empresa é um NÓ com período de validade.
+
+ex:Empresa          a owl:Class .
+ex:Estabelecimento  a owl:Class .
+ex:Contrato         a owl:Class .
+ex:ParticipacaoSocietaria a owl:Class .
+
+ex:razaoSocial      a owl:DatatypeProperty ; rdfs:domain ex:Empresa .
+ex:naturezaJuridica a owl:DatatypeProperty ; rdfs:domain ex:Empresa .
+ex:capitalSocial    a owl:DatatypeProperty ; rdfs:domain ex:Empresa .
+ex:porte            a owl:DatatypeProperty ; rdfs:domain ex:Empresa .
+ex:dataAtualizacao  a owl:DatatypeProperty ; rdfs:domain ex:Empresa .
+
+ex:pertenceA        a owl:ObjectProperty ; rdfs:domain ex:Estabelecimento ; rdfs:range ex:Empresa .
+ex:situacaoCadastral a owl:DatatypeProperty ; rdfs:domain ex:Estabelecimento .
+ex:dataSituacao     a owl:DatatypeProperty ; rdfs:domain ex:Estabelecimento .
+ex:cnae             a owl:DatatypeProperty ; rdfs:domain ex:Estabelecimento .
+ex:uf               a owl:DatatypeProperty ; rdfs:domain ex:Estabelecimento .
+ex:municipio        a owl:DatatypeProperty ; rdfs:domain ex:Estabelecimento .
+
+ex:socio            a owl:ObjectProperty ; rdfs:domain ex:ParticipacaoSocietaria ; rdfs:range ex:Pessoa .
+ex:empresa          a owl:ObjectProperty ; rdfs:domain ex:ParticipacaoSocietaria ; rdfs:range ex:Empresa .
+ex:nomeSocio        a owl:DatatypeProperty ; rdfs:domain ex:ParticipacaoSocietaria .
+ex:qualificacao     a owl:DatatypeProperty ; rdfs:domain ex:ParticipacaoSocietaria .
+ex:validoDe         a owl:DatatypeProperty ; rdfs:domain ex:ParticipacaoSocietaria .
+ex:validoAte        a owl:DatatypeProperty ; rdfs:domain ex:ParticipacaoSocietaria .  # ausente = vínculo ainda vigente
+
+ex:fornecedor       a owl:ObjectProperty ; rdfs:domain ex:Contrato ; rdfs:range ex:Empresa .
+ex:gestor           a owl:ObjectProperty ; rdfs:domain ex:Contrato ; rdfs:range ex:Pessoa .
+ex:valor            a owl:DatatypeProperty ; rdfs:domain ex:Contrato .
+ex:vigenciaInicio   a owl:DatatypeProperty ; rdfs:domain ex:Contrato .
+ex:vigenciaFim      a owl:DatatypeProperty ; rdfs:domain ex:Contrato .

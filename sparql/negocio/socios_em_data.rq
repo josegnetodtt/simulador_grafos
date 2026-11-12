@@ -1,0 +1,14 @@
+PREFIX ex:  <http://petrobras.exemplo/onto#>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+
+# Quem era sócio de cada empresa em 2020-03-01? Para a empresa 99999993 deve aparecer só PX000004.
+SELECT ?socio ?empresa
+WHERE {
+  ?p a ex:ParticipacaoSocietaria ;
+     ex:socio ?socio ;
+     ex:empresa ?empresa ;
+     ex:validoDe ?de .
+  OPTIONAL { ?p ex:validoAte ?ate }
+  FILTER (?de <= "2020-03-01"^^xsd:date &&
+          (!BOUND(?ate) || ?ate >= "2020-03-01"^^xsd:date))
+}

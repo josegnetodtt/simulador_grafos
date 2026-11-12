@@ -1,0 +1,5 @@
+PREFIX ex: <http://petrobras.exemplo/onto#>
+
+# RUIM: caminho ilimitado. Como temParente é simétrica, o motor percorre ciclos e a rede inteira.
+SELECT DISTINCT ?parente
+WHERE { <http://petrobras.exemplo/pessoa/EX000004> ex:temParente* ?parente }

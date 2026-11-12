@@ -1,0 +1,14 @@
+@prefix ex:   <http://petrobras.exemplo/onto#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+
+# ResOps: cada versão de modelo é imutável e aponta para a versão anterior (cadeia de versões).
+
+ex:ModeloVersao  a owl:Class .
+ex:campo           a owl:ObjectProperty ; rdfs:domain ex:ModeloVersao .
+ex:numeroVersao    a owl:DatatypeProperty ; rdfs:domain ex:ModeloVersao .
+ex:versaoAnterior  a owl:ObjectProperty ; rdfs:domain ex:ModeloVersao ; rdfs:range ex:ModeloVersao .
+ex:autor           a owl:DatatypeProperty ; rdfs:domain ex:ModeloVersao .
+ex:dataCriacao     a owl:DatatypeProperty ; rdfs:domain ex:ModeloVersao .
+ex:status          a owl:DatatypeProperty ; rdfs:domain ex:ModeloVersao .
+ex:hashConteudo    a owl:DatatypeProperty ; rdfs:domain ex:ModeloVersao .
