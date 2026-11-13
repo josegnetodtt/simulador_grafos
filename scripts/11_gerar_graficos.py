@@ -7,7 +7,7 @@ Gráficos (cada um responde a uma pergunta simples):
   04  O quanto uma consulta mal escrita custa a mais?
   05  Quanta memória precisaríamos em 1 e 2 bilhões de triplas? (projeção linear, a calibrar)
   06  Streaming x tudo-em-memória: como a RAM se comporta na conversão para RDF?
-  07  Desenho do grafo dos casos plantados (para entender as relações)
+  07  Desenho do grafo dos casos plantados; o tamanho de cada bolinha mostra o quanto ela pesa na resposta
 
 Uso: python scripts/11_gerar_graficos.py [--escala S]
 """
@@ -210,26 +210,51 @@ def g07_grafo():
             g.add_edge(r["id_contrato"], r["cnpj_basico_fornecedor"], rotulo="fornecedor")
             g.add_edge(r["id_gestor"], r["id_contrato"], rotulo="gestor")
 
+    # Relevância = em quantos caminhos de alerta (empregado -> ... -> contrato) o nó aparece; gestor fica de fora do caminho
+    sem_gestor = nx.Graph([(u, v) for u, v, d in g.edges(data=True) if d["rotulo"] != "gestor"])
+    sem_gestor.add_nodes_from(g)
+    relevancia = {n: 0 for n in g}
+    arestas_resposta = set()
+    for c in alerta & set(g):
+        for e in (n for n in g if tipo_no[n] == "Empregado"):
+            if nx.has_path(sem_gestor, e, c):
+                caminho = nx.shortest_path(sem_gestor, e, c)
+                for n in caminho:
+                    relevancia[n] += 1
+                arestas_resposta.update(frozenset(p) for p in zip(caminho, caminho[1:]))
+    maior = max(relevancia.values()) or 1
+    tamanho = {n: 500 + 1900 * relevancia[n] / maior for n in g}
+
     cores = {"Empregado": "#4C78A8", "Pessoa": "#F58518", "Empresa": "#54A24B", "Contrato": "#B0B0B0"}
     pos = {}
     for i, comp in enumerate(nx.weakly_connected_components(g)):
-        sub = nx.kamada_kawai_layout(g.subgraph(comp))
+        sub = nx.spring_layout(g.subgraph(comp), seed=7, k=0.9, iterations=200)
         for n, (x, y) in sub.items():
             pos[n] = (x + (i % 2) * 3.0, y - (i // 2) * 2.6)
     fig, ax = plt.subplots(figsize=(16, 10))
-    nx.draw_networkx_edges(g, pos, ax=ax, arrows=True, arrowsize=14, edge_color="#777777", node_size=2200,
-                           connectionstyle="arc3,rad=0.08")
-    nx.draw_networkx_nodes(g, pos, ax=ax, node_size=2200, node_color=[cores[tipo_no[n]] for n in g],
-                           edgecolors=["red" if n in alerta else "white" for n in g],
-                           linewidths=[4 if n in alerta else 1 for n in g])
+    todos = list(g)
+    tams = [tamanho[n] for n in todos]
+    na_resposta = [(u, v) for u, v in g.edges if frozenset((u, v)) in arestas_resposta]
+    fora = [(u, v) for u, v in g.edges if frozenset((u, v)) not in arestas_resposta]
+    for lista, cor, larg in ((fora, "#AAAAAA", 1.0), (na_resposta, "#D62728", 3.0)):
+        nx.draw_networkx_edges(g, pos, ax=ax, edgelist=lista, nodelist=todos, node_size=tams, arrows=True,
+                               arrowsize=14, edge_color=cor, width=larg, connectionstyle="arc3,rad=0.08")
+    for parte, alfa in (([n for n in todos if relevancia[n] == 0], 0.35), ([n for n in todos if relevancia[n] > 0], 1.0)):
+        nx.draw_networkx_nodes(g, pos, ax=ax, nodelist=parte, node_size=[tamanho[n] for n in parte], alpha=alfa,
+                               node_color=[cores[tipo_no[n]] for n in parte],
+                               edgecolors=["red" if n in alerta else "white" for n in parte],
+                               linewidths=[4 if n in alerta else 1 for n in parte])
     nx.draw_networkx_labels(g, pos, {n: g.nodes[n]["rotulo"] for n in g}, font_size=7, ax=ax)
     nx.draw_networkx_edge_labels(g, pos, nx.get_edge_attributes(g, "rotulo"), font_size=7, ax=ax,
                                  connectionstyle="arc3,rad=0.08")
     ax.legend(handles=[plt.Line2D([], [], marker="o", linestyle="", color=c, label=t, markersize=12)
                        for t, c in cores.items()] +
               [plt.Line2D([], [], marker="o", linestyle="", markerfacecolor="white", markeredgecolor="red",
-                          markeredgewidth=3, label="contrato que DEVE gerar alerta", markersize=12)], loc="upper left")
-    ax.set_title("Casos plantados: empregado → parente → sócio de empresa → contrato (A, B, C e E)")
+                          markeredgewidth=3, label="contrato que DEVE gerar alerta", markersize=12)],
+              loc="upper center", bbox_to_anchor=(0.5, 0.0), ncol=5)
+    ax.set_title("Pergunta: quais contratos têm conflito de interesse?  Bolinha grande e linha vermelha = faz parte da "
+                 "resposta; bolinha pequena e apagada = não influencia a resposta")
+    ax.title.set_fontsize(11)
     ax.axis("off")
     salvar(fig, "07_grafo_casos_plantados.png")
 

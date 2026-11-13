@@ -15,6 +15,8 @@
 | Rodar o simulador na sua máquina | Seção 10 (ordem dos scripts) e o `README.md` |
 | Ver o plano de trabalho e entregas | Seções 13 e 14 |
 | Saber o que perguntar ao time da Petrobras | Seção 15.3 |
+| Entender o Anzo, as 4 fases (Onboard, Model, Blend, Access) e as telas | **Seção 16** (manual de campo) |
+| Entender Databricks x Anzo, ontologia x modelo canônico, textos e Elasticsearch | Seções 16.4 a 16.6 |
 
 **Três ideias para guardar desde já:**
 1. **Triplas** são "frases" (sujeito – predicado – objeto); o grafo é um monte de frases ligadas.
@@ -40,6 +42,7 @@
 13. [Roadmap por fases](#13-roadmap-por-fases)
 14. [Plano de estudo](#14-plano-de-estudo)
 15. [Riscos, critérios de aceite e perguntas em aberto](#15-riscos-critérios-de-aceite-e-perguntas-em-aberto)
+16. [Manual de campo: o Anzo e as ferramentas do dia a dia](#16-manual-de-campo-o-anzo-e-as-ferramentas-do-dia-a-dia)
 
 ---
 
@@ -507,6 +510,58 @@ HAVING (COUNT(DISTINCT ?nome) > 1)
 | **Ciranda** | Componentes, misturas e percentuais como nós (`ex:ComposicaoItem` com `ex:percentual`); navios, portos e janelas como nós; rotas como arestas com atributos |
 | **Conhecimento p/ IA** | Entidades + relações + **proveniência** (de qual documento/fonte veio, grau de confiança); URIs estáveis para facilitar *grounding* de agentes |
 
+### 9.6 Resultados medidos: qual modelo temporal vence?
+
+> **De onde vêm os números:** `benchmarks/resultados/` (escala **S**, triple store local pyoxigraph, gerados pelo script `10_benchmark_modelos.py`). Servem para **comparar as opções entre si**, não para prever o AnzoGraph. Ainda **não há** resultados das escalas M e G neste repositório: rode `python scripts/10_benchmark_modelos.py --escala M` para ampliar. Os gráficos correspondentes são `01`, `02`, `03` e `04` (seção 10.7).
+
+**a) Tamanho: quantas triplas e quanta memória cada modelo usa** (`modelos_S.csv`, 12 fotos mensais no B)
+
+| Modelo | Triplas | Memória do modelo | Pico de memória | Comparação |
+|---|---|---|---|---|
+| **A** (vínculo + `OPTIONAL`) | 158.690 | 66 MB | 204 MB | O menor |
+| **A2** (data-fim 9999-12-31) | 176.218 | 73 MB | 216 MB | **+11%** de triplas sobre o A (1 tripla a mais por vínculo ativo) |
+| **B** (foto mensal) | 219.254 | 72 MB | 241 MB | **+38%** sobre o A, com só 12 fotos |
+
+**b) Velocidade: tempo de cada pergunta** (`consultas_modelos_S.csv`)
+
+| Pergunta | A | A2 | B | Leitura simples |
+|---|---|---|---|---|
+| Q1 · Quem eram os sócios da empresa na data? | 0,15 ms | 0,13 ms | 0,07 ms | Todos instantâneos |
+| Q2 · Quantos vínculos ativos na data? | 230 ms | 251 ms | **11 ms** | B é ~20x mais rápido em **contagem por data** |
+| **Q3 · Conflito de interesse na data** | **14.986 ms** | **33 ms** | 19 ms | **O A é ~450x mais lento que o A2**, por causa do `OPTIONAL` |
+| Q4 · Histórico completo da empresa | 0,12 ms | 0,22 ms | 0,07 ms | Todos instantâneos (mas veja o alerta abaixo) |
+| Q5 · Empresas com mais de um sócio no histórico | 97 ms | 93 ms | 161 ms | Aqui o B é o mais lento |
+
+**Dois alertas para não tirar conclusão errada:**
+- **A Q3 é a pergunta central do Synapse**, e é onde o modelo A "quebra": 15 segundos contra 33 milissegundos. Todos os três retornam as mesmas 122 linhas, então o resultado é igual; só o caminho é caro.
+- **O B não responde igual** em duas perguntas: Q4 devolveu **1** linha (A e A2 devolveram 3) e Q5 devolveu **5.956** (A e A2, 7.541). Como ele só guarda as fotos mensais, **perde mudanças ocorridas entre uma foto e outra** e a data exata. Velocidade não compensa resposta incompleta.
+
+**c) Custo do B ao longo do tempo** (`varredura_snapshots_S.csv`)
+
+| Fotos mensais | Triplas do B | Memória do B | Comparação com o A (158.690) |
+|---|---|---|---|
+| 3 | 53.086 | 20 MB | 0,3x |
+| 6 | 107.346 | 39 MB | 0,7x |
+| 12 | 219.254 | 72 MB | **1,4x** (já passou o A) |
+| 24 | 445.116 | 139 MB | 2,8x |
+| 60 | 1.064.803 | 317 MB | **6,7x** |
+
+**Como ler:** o B cresce em linha reta com o número de fotos (~18 mil triplas por foto nesta escala); o A **não cresce com o tempo**, só quando algo muda. O cruzamento acontece com cerca de **9 fotos**: guardar mais de 9 meses de histórico no B já custa mais que o modelo A.
+
+**d) Consultas "boas x ruins"** (`tuning_S.csv`, modelo A; ver 10.5)
+
+| Par | Ruim | Bom | Diferença |
+|---|---|---|---|
+| 01 · `OPTIONAL` antes x depois do padrão obrigatório | 254 ms | 0,37 ms | **~690x** |
+| 02 · Caminho de parentesco ilimitado x até 3 graus | 0,15 ms | 0,21 ms | Sem diferença **nesta escala** (base pequena e pouco densa) |
+| 03 · `SELECT *` sem `LIMIT` x projetado com `LIMIT` | 510 ms (241.529 linhas) | 0,7 ms (100 linhas) | **~730x** |
+
+**Conclusões (iniciais, a confirmar no ambiente de homologação):**
+1. Para a **Receita**, usar **A2**: sem custo relevante de memória (+11%) e **~450x** mais rápido na pergunta de conflito.
+2. O **B** serve para **controle de lote e versão** (ResOps, carga incremental, auditoria) com poucas fotos; não para guardar histórico longo.
+3. **Escrever a consulta certa** pesa tanto quanto escolher o modelo (pares 01 e 03).
+4. O par 02 **não prova** que o caminho ilimitado é inofensivo: em base grande e densa ele deve explodir. Repetir em M/G e no Anzo.
+
 ---
 
 ## 10. Scripts simulados
@@ -625,7 +680,7 @@ Cada par faz **a mesma pergunta** (mesmo resultado) escrita de duas formas. O sc
 | `04_tuning_ruim_vs_bom_<escala>.png` | Quanto custa escrever a consulta "do jeito ruim"? |
 | `05_projecao_de_memoria.png` | Quanta memória seria necessária para 1 e 2 bilhões de triplas? (reta de referência, a calibrar) |
 | `06_memoria_na_conversao.png` | Streaming x tudo-em-RAM na conversão para RDF |
-| `07_grafo_casos_plantados.png` | Desenho das relações (empregado → parente → sócio → empresa → contrato) |
+| `07_grafo_casos_plantados.png` | Qual o desenho das relações e **quem pesa na resposta** de "quais contratos têm conflito de interesse?" (bolinha grande + linha vermelha = faz parte da resposta; ver 16.7) |
 
 > **Como ler os gráficos de tempo:** o eixo vertical é **logarítmico**. Cada "degrau" para cima é **10 vezes** mais lento. Uma barra dois degraus acima da outra é 100 vezes pior.
 
@@ -794,6 +849,7 @@ gantt
 - [ ] Obter **ontologia atual do Synapse** e as transformações (steps) existentes.
 - [ ] Identificar **onde exatamente** ocorre a falha de memória (qual etapa, qual volume, qual mensagem).
 - [ ] Listar fontes, donos, frequência de atualização.
+- [ ] Fazer um **tour pelas telas do Anzo** (16.3) com alguém do time e preencher a coluna "nome na minha versão".
 - **Saída:** documento de situação atual + lista de perguntas respondidas (seção 15).
 
 ### Fase 1 — Simulador e bases
@@ -807,7 +863,7 @@ gantt
 
 ### Fase 2 — Diagnóstico com evidências
 **Objetivo:** provar **onde e por que** a memória acaba e o desempenho cai.
-- [x] EXP-04 (modelos temporais A, A2 e B) e EXP-06 (consultas boas x ruins): scripts prontos e resultados da escala S/M em 9.6.
+- [x] EXP-04 (modelos temporais A, A2 e B) e EXP-06 (consultas boas x ruins): scripts prontos e resultados da escala S em 9.6 (M e G ainda por rodar).
 - [ ] EXP-01 a EXP-03, EXP-05, EXP-07 e EXP-08 (seção 12.2) e registrar em `benchmarks/`.
 - [ ] Repetir os experimentos no **ambiente de homologação** (os números do simulador servem só para comparar opções entre si).
 - **Saída:** relatório "Causas e ganhos esperados por mitigação" (priorizado).
@@ -863,6 +919,8 @@ Ordem sugerida (do básico ao avançado), sempre com **prática no simulador**:
 | 6 | SPARQL Update e incremental | Simular delta mensal com `DELETE/INSERT` |
 | 7 | Databricks/PySpark para RDF | Adaptar o notebook 11.3 |
 | 8 | Memória, benchmarks e cluster | Executar EXP-01 a EXP-06 e escrever a conclusão |
+| 9 | O Anzo por dentro (cap. 16): as 4 fases e as telas | Desenhar no papel o caminho de uma pergunta (Onboard → Model → Blend → Access) usando o Synapse |
+| 10 | Textos e IA (16.6) | Escrever 10 triplas "documento menciona empresa" e uma pequena taxonomia (SKOS) |
 
 **Dica:** a cada semana, escreva em `docs/estudo/` uma página: *"o que aprendi / o que me confundiu / como explicaria para um colega"*.
 
@@ -904,6 +962,244 @@ Ordem sugerida (do básico ao avançado), sempre com **prática no simulador**:
 10. Qual a **expectativa de volume 2027** do time de IA, em número de entidades/documentos?
 11. Quais são os SLAs esperados (latência de consulta, disponibilidade, janela de carga)?
 12. Existem políticas de **segurança/LGPD** específicas para dados de sócios e parentesco?
+13. Como o Databricks entrega dados ao Anzo hoje: tabelas, arquivos RDF ou conexão JDBC? (ver 16.4)
+14. O módulo de **textos** (Anzo Unstructured + Elasticsearch) está licenciado e instalado? Quem mantém o Elasticsearch? (ver 16.6)
+15. Existe um **modelo canônico corporativo** aprovado ou cada frente tem o seu? Quem é o dono de cada ontologia? (ver 16.5)
+16. Quais **dashboards** (Hi-Res Analytics) já existem e quem os consome?
+
+---
+
+## 16. Manual de campo: o Anzo e as ferramentas do dia a dia
+
+> Este capítulo nasceu de um vídeo de apresentação do produto e das dúvidas que surgiram dele. Ele **não substitui a documentação oficial** da versão instalada na Petrobras: nomes de menus e botões mudam entre versões (o produto hoje também aparece como *Altair Graph Studio*). O que estiver marcado com **(confirmar)** deve ser conferido na tela real.
+>
+> **Sobre o nome:** o produto se chama **Anzo** (no vídeo e nas conversas aparece "Enzo"). O **AnzoGraph** é o motor de grafos; o **Anzo** é o "painel de controle" web que fica em volta dele.
+
+### 16.1 Visão geral: o Anzo como uma cozinha de restaurante
+
+| Peça | O que é, em uma frase | Analogia |
+|---|---|---|
+| **Anzo** | Aplicação web onde se configura tudo: fontes, modelos, montagem do grafo e telas de consumo | A gerência do restaurante |
+| **AnzoGraph** | O motor que guarda as triplas **na memória** e responde SPARQL | A cozinha (os fogões) |
+| **Anzo Unstructured + Elasticsearch** | Módulo que lê **textos** (PDF, Word...), marca o que é importante e cria um índice de busca | A biblioteca com fichário |
+| **Hi-Res Analytics (dashboards)** | Telas para o usuário final explorar o grafo | O salão |
+| **Databricks** (fora do Anzo) | Onde as tabelas são limpas e preparadas | O fornecedor que entrega os ingredientes lavados e cortados |
+
+### 16.2 As 4 fases da construção de um grafo de conhecimento
+
+```mermaid
+flowchart LR
+    A["1. ONBOARD<br/>trazer os dados"] --> B["2. MODEL<br/>desenhar o modelo"]
+    B --> C["3. BLEND<br/>misturar dados + modelo"]
+    C --> D["4. ACCESS<br/>consumir e perguntar"]
+    D -. "novas perguntas<br/>pedem novos dados" .-> A
+```
+
+> Na prática as fases **não são uma linha reta**: você desenha o modelo (Model) já pensando nos dados que existem (Onboard) e volta várias vezes. O desenho acima mostra a ordem lógica, não a cronologia.
+
+| Fase | Em palavras simples | O que se faz nela | Exemplo no Synapse | Onde isso aparece neste roadmap / simulador |
+|---|---|---|---|---|
+| **ONBOARD** (integrar) | A "porta de entrada": conectar as fontes e trazer os dados, **estruturados** (tabelas, CSV, bancos) ou **não estruturados** (documentos, textos) | Cadastrar a fonte, descrever as colunas, ligar cada coluna a uma propriedade do modelo, gerar o RDF | Tabelas de RH, contratos e Receita entrando no grafo | Seção 8 (bases), script `02` e `rdf_utils.py`, seção 11 (Databricks) |
+| **MODEL** (modelar) | O "projeto da casa": definir **que tipos de coisa existem e como se relacionam**, o modelo canônico de destino | Criar e evoluir ontologias; decidir como modelar o tempo; padronizar URIs | Ontologia de parentesco, vínculo societário com `validoDe`/`validoAte` | Seção 9 e pasta `ontologies/` |
+| **BLEND** (misturar) | A "obra": combinar os dados com o modelo, **cruzando fontes** e criando conhecimento novo. É a **maior parte do grafo** e a que mais consome memória | Montar o *Graphmart*, em camadas (carregar dados, rodar transformações SPARQL, aplicar regras de negócio) | Cruzar empregado → parente → sócio → empresa → contrato | Seções 4 e 12 (memória) e `sparql/tuning/04_transformacao_fatiada.ru` |
+| **ACCESS** (acessar) | O "salão": quem precisa da resposta consome o grafo | Dashboards, consultas SPARQL, buscas, entrega para outros sistemas e agentes de IA. Inclui **busca semântica em documentos** (16.6) | Painel de conflito de interesse; consultas `sparql/negocio/` | Seção 9.4 e pasta `sparql/negocio/` |
+
+**Duas observações sobre o que foi anotado no vídeo:**
+
+1. A **lógica de negócio** vive em dois lugares: a **estrutura** das regras fica no **Model** (ex.: "cônjuge é um tipo de parente"), e as regras que **geram dados novos** (ex.: "marque como conflito quando...") ficam no **Blend**. Veja 16.5.
+2. Em **Access**, a indexação semântica de documentos significa ligar os textos às coisas do grafo (empresas, pessoas, conceitos de uma taxonomia). Veja 16.6.
+
+**Onde o seu dia a dia pesa mais:** Pilar 2 (engenharia de dados) = **Onboard**; Pilar 1 (modelagem) = **Model**; Pilar 3 (tuning/memória) = **Blend**, porque é lá que as transformações pesadas rodam e a RAM estoura.
+
+### 16.3 Mapa das telas (interfaces) do Anzo
+
+> Lista por fase, com o que cada tela faz. Os nomes são os usuais do produto; **(confirmar)** o nome exato e a localização no menu da versão da Petrobras, e anote na última coluna.
+
+| Fase | Tela / conceito | O que faz (simples) | Equivalente no simulador | Nome na minha versão |
+|---|---|---|---|---|
+| Onboard | **Data Sources / Connections** | Cadastra a "porta" para uma fonte: pasta de arquivos, banco por JDBC, Databricks... | Pasta `data/raw/` | |
+| Onboard | **Schemas** | Descreve as colunas e tabelas que a fonte tem (o "formato" do CSV) | Cabeçalho dos CSV (seção 8.2) | |
+| Onboard | **Mappings (graph data)** | Liga **coluna → propriedade do modelo** e gera as URIs | `rdf_utils.py` (ex.: `_tri_socio`) | |
+| Onboard | **Datasets** | O "pacote" já convertido em RDF, pronto para ser carregado | Arquivos `.nt.gz` em `data/rdf/` | |
+| Model | **Ontologies** | Editor das ontologias (classes, propriedades, relações) | Pasta `ontologies/` | |
+| Blend | **Graphmarts** | A "mesa de montagem": junta datasets e camadas num grafo consultável. Tem botões para ativar, recarregar e desativar | O triple store do script `10` | |
+| Blend | **Layers (camadas)** | Etapas em ordem; cada camada acrescenta algo ao grafo | Ordem dos scripts 02 → transformações | |
+| Blend | **Steps (passos)** | O que cada camada executa: carregar dados, rodar um SPARQL `INSERT`, aplicar regras | `sparql/tuning/04_transformacao_fatiada.ru` | |
+| Blend | **Views** | "Recortes" do grafo, para mostrar só o que interessa a um uso | Consultas projetadas (`SELECT` com poucas colunas) | |
+| Access | **Query / SPARQL editor** | Escrever e testar consultas | Pasta `sparql/` | |
+| Access | **Dashboards (Hi-Res Analytics)** | Telas visuais: tabelas, gráficos e **grafos interativos** | Gráficos de `benchmarks/relatorios/` (em especial o 07) | |
+| Texto | **Pipelines / Annotators** | Leem documentos e marcam entidades (16.6) | `conhecimento_ia/documentos.csv` (só os metadados) | |
+| Texto | **Elasticsearch** | Busca por palavras em milhares de documentos (16.6) | Não simulado | |
+| Admin | **Jobs / Logs / Status do AnzoGraph** | Acompanhar cargas, erros e uso de memória | `05_monitor_memoria.py` | |
+| Admin | **Usuários e permissões** | Quem enxerga o quê (importante para LGPD) | — | |
+
+**Sobre o "PLM Graphmart" que apareceu no vídeo:** não é um recurso do sistema. Pelo que consegui deduzir, é o **nome de um Graphmart de demonstração** (PLM costuma significar *Product Lifecycle Management*, gestão do ciclo de vida de produtos). Para nós, o equivalente seria um "Graphmart do Synapse". **(confirmar)** vendo a tela do vídeo.
+
+### 16.4 Como o Databricks se relaciona com o Anzo
+
+**Ideia em uma frase:** o **Databricks prepara e entrega** os dados; o **Anzo é onde o grafo vive, é cruzado e consultado**.
+
+```mermaid
+flowchart LR
+    F["Fontes<br/>RH · Contratos · Receita"] --> DB["DATABRICKS<br/>limpar, deduplicar, detectar delta"]
+    DB -- "opção 1<br/>tabelas (Parquet/CSV)" --> ON["ANZO · Onboard<br/>mapeia e converte"]
+    DB -- "opção 2<br/>RDF pronto (.nq.gz)" --> BL["ANZO · Blend<br/>só carrega"]
+    DB -. "opção 3<br/>JDBC direto" .-> ON
+    ON --> BL
+    BL --> AG[("AnzoGraph<br/>memória")]
+    AG --> AC["Access<br/>dashboards · SPARQL · IA"]
+```
+
+| Opção | Como funciona | Quando usar | Cuidado |
+|---|---|---|---|
+| **1. Databricks entrega tabelas; o Anzo faz o Onboard** | Você grava Parquet/CSV limpos em armazenamento compartilhado; o Anzo mapeia colunas e gera o RDF | Tabelas pequenas/médias e mapeamentos que o time quer manter **pela tela** | A conversão pesada passa a acontecer **dentro do Anzo** e pode competir por recursos |
+| **2. Databricks gera o RDF pronto** | O notebook da seção 11.3 grava `.nq.gz` particionado; o Anzo só **carrega** os arquivos num Graphmart | **Receita Federal e outros grandes volumes** | Você assume URIs, escape de textos e extensão aceita pelo carregador |
+| **3. Anzo lê direto do Databricks (JDBC)** | O Anzo consulta o Databricks como se fosse um banco | Protótipos e cargas pequenas sob demanda | Depende do cluster ligado, tem custo e precisa de driver/rede aprovados |
+
+**Regra prática de divisão de trabalho:**
+
+| Faça no **Databricks** (tabelas) | Faça no **Anzo** (grafo) |
+|---|---|
+| Limpar, padronizar, deduplicar, filtrar | Definir o modelo (ontologia) |
+| Detectar o que é novo/alterado/removido (delta) | Cruzar fontes pelas relações (parentesco → sócio → empresa → contrato) |
+| Juntar chaves e calcular colunas simples | Regras de negócio que dependem de **caminhos** no grafo |
+| Gerar RDF em larga escala (opção 2) | Consultas, dashboards e acesso para IA |
+
+**Recomendação inicial:** opção **2** para os volumes grandes (alinhada às seções 4.2 e 11) e opção **1** para tabelas pequenas. **O método realmente aprovado no ambiente da Petrobras é a pergunta 13 da seção 15.3.**
+
+### 16.5 Ontologia x modelo canônico x regras de negócio
+
+**Resumo curto:** ontologia e modelo canônico são, **na prática do dia a dia, o mesmo arquivo**; mas **regras de negócio não ficam todas dentro dele**.
+
+| Termo | Explicação simples | Analogia | Onde fica |
+|---|---|---|---|
+| **Ontologia** | O dicionário e a gramática de um assunto: que tipos de coisa existem e como se relacionam | A planta de uma casa | Arquivos `.ttl`/OWL (pasta `ontologies/`), na fase **Model** |
+| **Modelo canônico** | A ontologia **escolhida como formato oficial de destino**: não importa de onde o dado vem (RH, Receita), ele é traduzido para este modelo único | A planta **aprovada** que todas as obras seguem | É uma ontologia; o que a torna "canônica" é ser **o padrão acordado** entre as áreas |
+| **"Contrato" canônico** | Jeito informal de falar do modelo canônico: as fontes se comprometem a falar a mesma "língua". Não é um documento jurídico | O "combinado" entre áreas | Documentação + ontologia versionada |
+| **Regra de negócio** | Uma decisão do tipo "isto é conflito de interesse quando..." | O regulamento do condomínio | **Três lugares**, na tabela abaixo |
+
+**Onde moram as regras de negócio (o ponto que costuma confundir):**
+
+| Tipo de regra | Exemplo | Onde mora | Fase |
+|---|---|---|---|
+| **Estrutural** | "Cônjuge é um tipo de parente"; "filho é o inverso de pai"; "todo contrato tem um fornecedor" | Dentro da **ontologia** | Model |
+| **De transformação** | "Se há parente sócio de fornecedor com contrato sobreposto, **crie** a relação `temConflito`" | **Steps SPARQL** do Graphmart (`INSERT ... WHERE`) | Blend |
+| **De consulta/uso** | "Mostre só conflitos dos últimos 12 meses, por área" | **Consultas** e **dashboards** | Access |
+
+**Por que separar?** Regras que mudam com frequência (limites, prazos) ficam fora da ontologia, que deve ser **estável e versionada**. Mudar uma ontologia afeta todo mundo que a usa; mudar um step afeta só aquele Graphmart.
+
+**Modelo canônico na prática, no Synapse:** RH diz `cpf`, Receita diz `id_socio`, contratos diz `id_gestor`. O canônico diz apenas `ex:Pessoa` com URI `/pessoa/<id>`; cada fonte é **traduzida** para ele na fase Onboard. Assim, cruzar fontes vira trivial: todas já falam `ex:Pessoa`.
+
+### 16.6 Textos e IA: Anotadores, Elasticsearch e RDF de documentos
+
+**O problema:** um grafo guarda bem *tabelas* (pessoas, contratos). Mas muito conhecimento está em **texto corrido**: relatórios, atas, manuais, PDFs. Como ligar um texto ao grafo?
+
+```mermaid
+flowchart LR
+    D["Documentos<br/>PDF · Word · texto"] --> X["1. Extrair o texto"]
+    X --> T["2. Dividir em trechos"]
+    T --> N["3. ANOTADORES<br/>marcam entidades e conceitos"]
+    N --> R["4. RDF DE DOCUMENTOS<br/>documento · trecho · menciona · confiança"]
+    T --> E["5. ELASTICSEARCH<br/>índice de busca por palavras"]
+    R --> G[("AnzoGraph")]
+    E --> A["ACCESS<br/>busca + grafo juntos"]
+    G --> A
+```
+
+| Termo | O que é, em linguagem simples | Analogia |
+|---|---|---|
+| **Anotador (annotator)** | Um "leitor automático" que percorre o texto e **marca** o que reconhece: um CNPJ, o nome de uma empresa, um termo da taxonomia, uma pessoa, uma data. Pode funcionar por **lista de nomes**, por **padrão** (ex.: formato de CNPJ) ou por **modelo de linguagem** | O marca-texto colorido de quem estuda |
+| **Taxonomia** | Lista **organizada em níveis** de conceitos e sinônimos (ex.: "FPSO" é um tipo de "Unidade de produção"). Costuma ser escrita em **SKOS** (padrão de taxonomias em RDF) | O índice remissivo de um livro |
+| **Elasticsearch (pesquisa elástica)** | Mecanismo de **busca por palavras** em muitos textos, muito rápido. Guarda, para cada palavra, em quais documentos ela aparece | O "Google" interno dos documentos |
+| **RDF de documentos** | A **ficha do documento escrita em triplas**: quem é o documento, quais trechos tem, **que entidades cada trecho menciona** e de onde veio (proveniência) | A ficha catalográfica da biblioteca, ligada ao mapa do grafo |
+| **Indexação semântica** | Indexar o texto **pelo significado**, usando a taxonomia: ao buscar "unidade de produção", encontra documentos que só dizem "FPSO" | Buscar por assunto, não só pela palavra exata |
+
+**Exemplo (simulado) de RDF de documento**, no mesmo estilo da seção 9 e da ontologia `conhecimento_ia.ttl`:
+
+```turtle
+@prefix ex:  <http://petrobras.exemplo/onto#> .
+@prefix doc: <http://petrobras.exemplo/documento/> .
+@prefix tre: <http://petrobras.exemplo/trecho/> .
+@prefix emp: <http://petrobras.exemplo/empresa/> .
+
+doc:D001  a ex:Documento ;
+          ex:titulo "Relatório de auditoria de fornecedores" ;
+          ex:fonte  "Integridade" ;
+          ex:contemTrecho tre:D001_p3 .
+
+tre:D001_p3  ex:menciona   emp:12345678 ;      # o anotador reconheceu o CNPJ
+             ex:confianca  0.92 ;               # o quanto o anotador "tem certeza"
+             ex:anotadoPor ex:AnotadorCNPJ .    # proveniência: quem marcou
+```
+
+> As propriedades `ex:contemTrecho`, `ex:confianca` e `ex:anotadoPor` são **sugestões de modelagem**; hoje a ontologia do simulador tem só `ex:Documento` e `ex:menciona`. Evoluí-la é um bom exercício da semana 10.
+
+**Como os dois mundos se complementam (exemplo):** "Quais documentos falam de fornecedores que têm conflito de interesse?"
+1. O **grafo** responde quais empresas estão em conflito (parentesco → sócio → contrato).
+2. O **RDF de documentos** liga essas empresas aos trechos que as mencionam.
+3. O **Elasticsearch** destaca as palavras dentro do texto e ordena por relevância.
+
+Isso é a base dos **grafos de conhecimento para agentes de IA**: o agente busca o trecho certo (Elasticsearch), segue as relações (grafo) e cita a **fonte** (proveniência).
+
+**Pontos de atenção:** anotadores erram (por isso guardar `confianca`); texto pode conter dado sensível (LGPD); documentos viram **muitas triplas** (um por trecho e por menção), então entram na conta de memória (seção 12) **(estimar antes)**.
+
+### 16.7 Visualização: a bolinha mostra a relevância na resposta
+
+O gráfico `07_grafo_casos_plantados.png` agora responde a uma pergunta de negócio simulada: **"quais contratos têm conflito de interesse?"**
+
+| O que você vê | O que significa |
+|---|---|
+| Bolinha **grande e colorida** | Faz parte de um caminho que **gera alerta** (empregado → parente → sócio → empresa → contrato) |
+| **Linha vermelha grossa** | Relação percorrida pela resposta |
+| Bolinha **pequena e apagada** | Existe no grafo, mas **não influencia** a resposta (ex.: sócio que saiu antes do contrato) |
+| Borda vermelha na bolinha | Contrato que **deve** gerar alerta (gabarito da seção 10.3) |
+
+**Como a relevância é calculada:** conta-se em **quantos caminhos de alerta** cada nó aparece (o código está em `scripts/11_gerar_graficos.py`, função `g07_grafo`). Se uma pessoa ou empresa aparecer em dois alertas, ela fica maior que as demais. Rode com `python scripts/11_gerar_graficos.py --escala S`.
+
+**Outras formas de medir relevância (para evoluir):**
+
+| Medida | Pergunta que responde | Observação |
+|---|---|---|
+| Nº de caminhos de alerta (a usada) | "Quem participa de mais respostas?" | Simples e ligada à pergunta de negócio |
+| Grau (nº de ligações) | "Quem tem mais conexões?" | Destaca os supernós (caso D, empresa `99999990`) |
+| PageRank / centralidade | "Quem é mais central na rede?" | O AnzoGraph oferece funções de análise de grafos **(confirmar)** |
+| Valor de contrato | "Qual alerta pesa mais em dinheiro?" | Combina grafo com dado de negócio |
+
+**No Anzo real:** os dashboards (Hi-Res Analytics) têm uma visão de grafo em que o **tamanho e a cor** do nó podem vir de um valor calculado (ex.: uma contagem produzida por consulta SPARQL) **(confirmar a opção exata na versão instalada)**. O gráfico 07 é o "ensaio" desse dashboard.
+
+### 16.8 Manual rápido do dia a dia
+
+**Ciclo de uma demanda, do início ao fim:**
+
+| Passo | Pergunta que você faz | Fase | Onde olhar |
+|---|---|---|---|
+| 1 | Qual é a **pergunta de negócio**? Qual seria a resposta certa (gabarito)? | — | Seção 10.3 |
+| 2 | Que dados respondem e de quem são? | Onboard | Seção 8, perguntas 15.3 |
+| 3 | O modelo já tem as classes e relações? Preciso de tempo (validade)? | Model | Seção 9 |
+| 4 | Como os dados chegam (opção 1, 2 ou 3)? | Onboard | Seção 16.4 |
+| 5 | Qual transformação cruza as fontes? Cabe em fatias? | Blend | Seções 4.2 e 10.5 |
+| 6 | O resultado bate com o gabarito? A qualidade está ok? | Blend | Script `07`, `sparql/validacao/` |
+| 7 | Quem consome e como (painel, consulta, IA)? | Access | `sparql/negocio/` |
+| 8 | Quanta memória e quanto tempo gastou? Dentro do baseline? | Blend / Admin | Seção 12.4 |
+
+**Quando algo falha:**
+
+| Sintoma | Primeiro lugar para olhar | Hipótese mais provável |
+|---|---|---|
+| Carga do Graphmart falha | Jobs/Logs e uso de memória do AnzoGraph | Volume ou arquivo muito grande (seção 4.1, causas 1 e 4) |
+| Step de transformação falha | Qual step e quantas triplas ele tocava | `INSERT ... WHERE` monolítico: fatiar |
+| Painel lento | Consulta por trás do dashboard | `OPTIONAL` em cascata, caminho ilimitado (seção 10.5) |
+| Resultado "estranho" | Casos plantados e consultas de qualidade | Modelo temporal ou duplicidade (seções 8.3 e 10.6) |
+| Busca em documentos sem resultado | Pipeline de anotadores e índice do Elasticsearch | Anotador não reconheceu o termo, ou índice desatualizado |
+
+### 16.9 Dúvidas a confirmar na tela real
+
+- [ ] Nome exato das telas e menus na versão instalada (preencher a tabela 16.3).
+- [ ] Método aprovado de entrega Databricks → Anzo (16.4).
+- [ ] O que é o "PLM Graphmart" do vídeo e se existe algo equivalente na Petrobras (16.3).
+- [ ] Módulo de textos (Anzo Unstructured + Elasticsearch) disponível? Quais anotadores existem de fábrica e quais são customizados (16.6)?
+- [ ] Opção para dimensionar nós por valor calculado nos dashboards (16.7).
+- [ ] Existe modelo canônico corporativo e quem é o dono (16.5)?
 
 ---
 
@@ -913,3 +1209,4 @@ Ordem sugerida (do básico ao avançado), sempre com **prática no simulador**:
 2. Abrir os gráficos em `benchmarks/relatorios/` e ler a seção 9.6 ao lado, **entendendo cada barra**.
 3. Rodar as consultas de 9.4 (pasta `sparql/`) e conferir cada resultado com o gabarito (seção 10.3).
 4. Levar a lista da seção 15.3 para o time da Petrobras e pedir acesso a um ambiente de homologação para repetir os benchmarks no AnzoGraph real.
+5. Ler o capítulo 16 ao lado de uma tela real do Anzo e preencher a tabela 16.3 e o checklist 16.9.
